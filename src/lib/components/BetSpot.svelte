@@ -41,6 +41,7 @@
   export let hardwayCounter = null; // Number of rolls since last hit
   export let id = "";
   export let betType = ""; // Override for chip identifier ('P', 'B')
+  export let hideChips = false;
 
   $: betTypeDisplay = betType || 
                       (id.startsWith('place_') || id.startsWith('num_') ? 'P' : 
@@ -109,7 +110,7 @@
     </div>
   </slot>
 
-  {#if amount > 0}
+  {#if amount > 0 && !hideChips}
     <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
       <div class="relative w-12 h-12 flex items-center justify-center">
         <!-- Multiple chips stacked effect -->
