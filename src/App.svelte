@@ -247,7 +247,7 @@
       return;
     }
 
-    if (type === 'loss') {
+    if (type === '7out') {
       if (!loseSoundBuffer) return;
       const source = audioContext.createBufferSource();
       source.buffer = loseSoundBuffer;
@@ -425,7 +425,6 @@
     showWinOverlay = true;
     showLossOverlay = false;
     milestoneFlash = false;
-    playChipSound('win');
     
     if (countInterval) clearInterval(countInterval);
     if (winOverlayTimer) clearTimeout(winOverlayTimer);
@@ -469,7 +468,6 @@
     showLossOverlay = true;
     showWinOverlay = false;
     milestoneFlash = false;
-    playChipSound('loss');
     
     if (countInterval) clearInterval(countInterval);
     if (lossOverlayTimer) clearTimeout(lossOverlayTimer);
@@ -548,7 +546,7 @@
     return isActive ? sum + amount : sum;
   }, 0);
 
-  $: betsAreValid = point !== null ? activeBetsTotal >= 3 : (bets.passline >= 3);
+  $: betsAreValid = point !== null ? (activeBetsTotal > 0 || Object.values(bets).some(v => v > 0)) : (bets.passline > 0);
 
   function handlePress() {
     if (!isPressAvailable || point === null) {
@@ -636,7 +634,7 @@
     }
 
     if (id === 'passline' && point !== null) {
-      message = "PASS LINE IS A CONTRACT BET";
+      message = "PASS LINE IS LOCKED";
       return;
     }
 
@@ -781,13 +779,9 @@
   function rollDice() {
     if (rolling || showCommissionPrompt) return;
     
-    if (point === null && (bets.passline || 0) < 3) {
-      message = "MINIMUM $3 PASS LINE REQUIRED";
-      return;
-    }
-
     if (!betsAreValid) {
-      message = "MINIMUM TOTAL ACTIVE BET: $3";
+      if (point === null) message = "PLACE PASS LINE BET";
+      else message = "NO ACTIVE BETS";
       return;
     }
     
@@ -839,6 +833,34 @@
     }
   }
 
+  function testLoss() {
+    const amount = 50;
+    const fieldEl = document.querySelector('[data-bet-id="field"]');
+    if (fieldEl && phaserTableRef) {
+      const rect = fieldEl.getBoundingClientRect();
+      const pos = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      phaserTableRef.triggerLossAnimation([pos]);
+    } else if (phaserTableRef) {
+      // Fallback if fieldEl is not found
+      phaserTableRef.triggerLossAnimation([{ x: window.innerWidth / 2, y: window.innerHeight / 2 }]);
+    }
+    triggerLossOverlay(amount);
+  }
+
+  function testWin() {
+    const amount = 100;
+    const fieldEl = document.querySelector('[data-bet-id="field"]');
+    if (fieldEl && phaserTableRef) {
+      const rect = fieldEl.getBoundingClientRect();
+      const pos = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      phaserTableRef.triggerWinAnimation([pos]);
+    } else if (phaserTableRef) {
+      // Fallback if fieldEl is not found
+      phaserTableRef.triggerWinAnimation([{ x: window.innerWidth / 2, y: window.innerHeight / 2 }]);
+    }
+    triggerWinOverlay(amount);
+  }
+
   const numbers = [2, 3, 4, 5, 6, 8, 9, 10, 11, 12];
   
   const placeOdds = {
@@ -859,6 +881,14 @@
     const odds = {
       2: "11 TO 2", 3: "11 TO 4", 4: "9 TO 5", 5: "7 TO 5", 6: "7 TO 6",
       8: "7 TO 6", 9: "7 TO 5", 10: "9 TO 5", 11: "11 TO 4", 12: "11 TO 2"
+    };
+    return odds[n] || "";
+  }
+
+  function formatBuyOdds(n) {
+    const odds = {
+      2: "6 TO 1", 3: "3 TO 1", 4: "2 TO 1", 5: "3 TO 2", 6: "6 TO 5",
+      8: "6 TO 5", 9: "3 TO 2", 10: "2 TO 1", 11: "3 TO 1", 12: "6 TO 1"
     };
     return odds[n] || "";
   }
@@ -1206,13 +1236,11 @@
       const buyId = `buy_${n}`;
       if (currentBets[buyId] && isBetActive(buyId)) {
         if (total === n) {
-          const winAmount = Math.floor(currentBets[buyId] * trueOdds[n]);
-          const commission = Math.ceil(winAmount * 0.05);
-          const win = winAmount - commission;
-          winnings += win; // Only add profit, bet stays
+          const win = Math.floor(currentBets[buyId] * trueOdds[n]);
+          winnings += win; // Only add profit, bet stays. Commission already paid at placement.
           rollProfit += win;
           winningBets.push(buyId);
-          lastRollResult += `Buy ${n} $${win.toFixed(2)} WIN (Comm $${commission}). `;
+          lastRollResult += `Buy ${n} $${win.toFixed(2)} WIN. `;
         } else if (total === 7) {
           // Already handled in point === null / point !== null blocks for total === 7
         }
@@ -1301,28 +1329,27 @@
           return null;
         };
 
+        const totalLoss = losingBets.reduce((sum, id) => sum + (currentBets[id] || 0), 0);
+
         if (total === 7) {
-          // On a Seven Out, all bets are cleared from the table (even winners like Any 7)
-          // We trigger loss animations for everything that was on the table
+          // On a Seven Out, trigger loss animations for everything losing
           const lossPositions = losingBets.map(getPos).filter(p => p !== null);
-          const totalLoss = losingBets.reduce((sum, id) => sum + (currentBets[id] || 0), 0);
-          
           if (lossPositions.length > 0) {
             phaserTableRef.triggerLossAnimation(lossPositions);
-            playChipSound('loss');
-            if (totalLoss > 0) triggerLossOverlay(totalLoss);
+            if (totalLoss > 0) {
+              playChipSound('7out');
+              triggerLossOverlay(totalLoss);
+            }
           }
           
-          // Special case for Any 7 which technically wins on 7
-          if (winningBets.includes('any_7')) {
-            playChipSound('win');
-            triggerWinOverlay(currentBets.any_7 * 4); // Any 7 pays 4:1
-          }
-          
-          // Special case for Pass Line on come-out
-          if (winningBets.includes('passline')) {
-            playChipSound('win');
-            triggerWinOverlay(currentBets.passline); // Pass line pays 1:1
+          // Trigger win animations for all winners (Any 7, Pass Line on come-out)
+          if (winningBets.length > 0) {
+            const winPositions = winningBets.map(getPos).filter(p => p !== null);
+            if (winPositions.length > 0) {
+              phaserTableRef.triggerWinAnimation(winPositions);
+              playChipSound('win');
+              triggerWinOverlay(winnings);
+            }
           }
         } else {
           if (winningBets.length > 0) {
@@ -1337,10 +1364,11 @@
           if (losingBets.length > 0) {
             const lossPositions = losingBets.map(getPos).filter(p => p !== null);
             if (lossPositions.length > 0) {
-              const totalLoss = losingBets.reduce((sum, id) => sum + (currentBets[id] || 0), 0);
               phaserTableRef.triggerLossAnimation(lossPositions);
-              playChipSound('loss');
-              triggerLossOverlay(totalLoss);
+              if (totalLoss > 0) {
+                playChipSound('loss');
+                triggerLossOverlay(totalLoss);
+              }
             }
           }
         }
@@ -1525,21 +1553,23 @@
   {#if showWinOverlay}
     <div class="fixed inset-0 flex items-center justify-center z-[100] pointer-events-none">
       <div class="relative flex items-center justify-center scale-[1.5] animate-bounce {milestoneFlash ? 'scale-[1.7] brightness-150' : ''} transition-all duration-75">
-        <!-- Gold Win Amount Text -->
+        <!-- Emerald Win Amount Text -->
         <div class="relative flex items-center">
           <span class="text-7xl font-black italic tracking-tighter drop-shadow-[0_4px_12px_rgba(0,0,0,0.9)] 
-                       bg-gradient-to-b from-yellow-200 via-yellow-500 to-yellow-800 bg-clip-text text-transparent
+                       bg-gradient-to-b from-emerald-200 via-emerald-400 to-emerald-600 bg-clip-text text-transparent
                        border-text-stroke flex items-baseline">
             <span>${Math.floor(winAmountDisplay)}</span>
             <span class="relative">
               .
-              <!-- Radial Burst Background (Now positioned at the decimal point) -->
-              <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[200px] h-[200px] flex items-center justify-center opacity-80 pointer-events-none -z-10">
-                <div class="absolute inset-0 bg-[radial-gradient(circle,rgba(255,223,0,0.8)_0%,transparent_70%)] animate-pulse"></div>
-                {#each Array(12) as _, i}
-                  <div class="absolute w-[2px] h-[150px] bg-gradient-to-t from-transparent via-yellow-400 to-transparent"
-                       style="transform: rotate({i * 30}deg)"></div>
-                {/each}
+              <!-- Eclipse Effect Background (Now positioned at the decimal point) -->
+              <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] flex items-center justify-center opacity-80 pointer-events-none -z-10">
+                <div class="absolute inset-0 bg-[radial-gradient(circle,rgba(158,255,0,0.6)_0%,transparent_70%)] animate-pulse"></div>
+                <div class="absolute inset-[-40px] rounded-full z-0 pointer-events-none overflow-hidden">
+                  <div class="absolute inset-0 animate-eclipse-rays"
+                       style="background: repeating-conic-gradient(from 0deg, #9eff00 0deg 1deg, transparent 1deg 6deg);
+                              mask-image: radial-gradient(circle, black 30%, transparent 75%);
+                              -webkit-mask-image: radial-gradient(circle, black 30%, transparent 75%);"></div>
+                </div>
               </div>
             </span>
             <span>{(winAmountDisplay % 1).toFixed(2).split('.')[1]}</span>
@@ -1561,13 +1591,15 @@
             <span>-${Math.floor(lossAmountDisplay)}</span>
             <span class="relative">
               .
-              <!-- Red Radial Burst Background (Now positioned at the decimal point) -->
-              <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[200px] h-[200px] flex items-center justify-center opacity-80 pointer-events-none -z-10">
-                <div class="absolute inset-0 bg-[radial-gradient(circle,rgba(255,59,48,0.8)_0%,transparent_70%)] animate-pulse"></div>
-                {#each Array(12) as _, i}
-                  <div class="absolute w-[2px] h-[150px] bg-gradient-to-t from-transparent via-red-500 to-transparent"
-                       style="transform: rotate({i * 30}deg)"></div>
-                {/each}
+              <!-- Red Eclipse Effect Background (Now positioned at the decimal point) -->
+              <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] flex items-center justify-center opacity-80 pointer-events-none -z-10">
+                <div class="absolute inset-0 bg-[radial-gradient(circle,rgba(255,59,48,0.6)_0%,transparent_70%)] animate-pulse"></div>
+                <div class="absolute inset-[-40px] rounded-full z-0 pointer-events-none overflow-hidden">
+                  <div class="absolute inset-0 animate-eclipse-rays"
+                       style="background: repeating-conic-gradient(from 0deg, #ff3b30 0deg 1deg, transparent 1deg 6deg);
+                              mask-image: radial-gradient(circle, black 30%, transparent 75%);
+                              -webkit-mask-image: radial-gradient(circle, black 30%, transparent 75%);"></div>
+                </div>
               </div>
             </span>
             <span>{(lossAmountDisplay % 1).toFixed(2).split('.')[1]}</span>
@@ -1868,13 +1900,14 @@
                 <span class="text-[10px] font-black text-white uppercase tracking-widest">HARD WAYS <span class="opacity-70 font-bold">(# of rolls since last)</span></span>
               </div>
               
-              <div class="grid grid-cols-2 gap-x-2 gap-y-2 h-[35%]">
+              <div class="grid grid-cols-2 gap-x-2 gap-y-2 flex-[0_0_35%] min-h-[140px]">
                 <!-- Left Half -->
                 <div class="flex flex-col gap-2 border-r-2 border-white/20 pr-1">
                   <BetSpot 
                     id="hard_6" 
                     type="dice" 
                     dice={[3,3]} 
+                    label="Hard 6"
                     payout="9:1" 
                     hardwayCounter={hardwayCounters[6]}
                     className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" 
@@ -1882,12 +1915,12 @@
                     on:contextmenu={(e) => handleRemoveBet('hard_6', e)} 
                     amount={bets.hard_6} 
                     status={betStatus.hard_6} 
-                    isAutoOff={point === null} 
                   />
                   <BetSpot 
                     id="hard_8" 
                     type="dice" 
                     dice={[4,4]} 
+                    label="Hard 8"
                     payout="9:1" 
                     hardwayCounter={hardwayCounters[8]}
                     className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" 
@@ -1895,7 +1928,6 @@
                     on:contextmenu={(e) => handleRemoveBet('hard_8', e)} 
                     amount={bets.hard_8} 
                     status={betStatus.hard_8} 
-                    isAutoOff={point === null} 
                   />
                 </div>
                 <!-- Right Half -->
@@ -1904,6 +1936,7 @@
                     id="hard_10" 
                     type="dice" 
                     dice={[5,5]} 
+                    label="Hard 10"
                     payout="7:1" 
                     hardwayCounter={hardwayCounters[10]}
                     reverse={true}
@@ -1912,12 +1945,12 @@
                     on:contextmenu={(e) => handleRemoveBet('hard_10', e)} 
                     amount={bets.hard_10} 
                     status={betStatus.hard_10} 
-                    isAutoOff={point === null} 
                   />
                   <BetSpot 
                     id="hard_4" 
                     type="dice" 
                     dice={[2,2]} 
+                    label="Hard 4"
                     payout="7:1" 
                     hardwayCounter={hardwayCounters[4]}
                     reverse={true}
@@ -1926,7 +1959,6 @@
                     on:contextmenu={(e) => handleRemoveBet('hard_4', e)} 
                     amount={bets.hard_4} 
                     status={betStatus.hard_4} 
-                    isAutoOff={point === null} 
                   />
                 </div>
               </div>
@@ -1941,22 +1973,20 @@
                   <!-- SEVEN -->
                   <BetSpot 
                     id="any_7" 
-                    className="h-[20%] bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl flex flex-row items-center justify-between px-6 relative overflow-hidden" 
+                    className="flex-[0_0_18%] min-h-[50px] bg-[#0d2b18] border border-white/20 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] rounded-xl flex flex-row items-center justify-center px-4 relative overflow-hidden" 
                     on:click={() => handlePlaceBet('any_7')} 
                     on:contextmenu={(e) => handleRemoveBet('any_7', e)} 
                     amount={bets.any_7}
                   >
-                    <span class="text-base font-black text-white drop-shadow-md leading-none">4 TO 1</span>
-                    <span class="text-xs font-black text-white/40">•</span>
-                    <div class="flex-1 flex justify-center">
-                      <span class="uppercase tracking-tighter leading-none text-[28px] font-black text-[#ff3b30] drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)] italic">SEVEN</span>
-                    </div>
-                    <span class="text-xs font-black text-white/40">•</span>
-                    <span class="text-base font-black text-white drop-shadow-md leading-none">4 TO 1</span>
+                    <span class="text-[11px] font-bold text-white/90 whitespace-nowrap tracking-tight">4 TO 1</span>
+                    <span class="text-xl text-white/90 mx-4 font-bold leading-none">·</span>
+                    <span class="text-2xl font-black text-[#d63a30] uppercase tracking-wide drop-shadow-[0_0_8px_rgba(214,58,48,0.4)]">SEVEN</span>
+                    <span class="text-xl text-white/90 mx-4 font-bold leading-none">·</span>
+                    <span class="text-[11px] font-bold text-white/90 whitespace-nowrap tracking-tight">4 TO 1</span>
                   </BetSpot>
 
                   <!-- HORN BETS -->
-                  <div class="flex-1 grid grid-cols-2 grid-rows-2 gap-px relative border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl overflow-hidden">
+                  <div class="flex-1 grid grid-cols-2 grid-rows-2 gap-px relative border border-white/20 shadow-[inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl overflow-hidden">
                       <!-- Horn 2 -->
                       <BetSpot id="horn_2" type="dice" dice={[1,1]} payout="30 TO 1" className="bg-[#1a4d2e] border-emerald-400/20 hover:bg-emerald-700/40 transition-colors" on:click={() => handlePlaceBet('horn_2')} on:contextmenu={(e) => handleRemoveBet('horn_2', e)} amount={bets.horn_2} />
                       <!-- Horn 3 -->
@@ -1970,7 +2000,7 @@
                     <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
                       <BetSpot 
                         id="horn_bet" 
-                        className="bg-[#1a4d2e] border-2 border-emerald-400/50 px-4 py-1 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] pointer-events-auto" 
+                        className="bg-[#1a4d2e] border border-white/30 px-4 py-1 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] pointer-events-auto" 
                         on:click={() => handlePlaceBet('horn_bet')} 
                         on:contextmenu={(e) => handleRemoveBet('horn_bet', e)} 
                         amount={bets.horn_bet}
@@ -1981,19 +2011,19 @@
                   </div>
 
                   <!-- ANY CRAPS -->
-                  <div class="h-[20%] flex">
+                  <div class="flex-[0_0_18%] min-h-[50px] flex">
                     <BetSpot 
                       id="any_craps" 
-                      className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl flex flex-row items-center justify-between px-4 relative overflow-hidden" 
+                      className="flex-1 bg-[#0d2b18] border border-white/20 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] rounded-xl flex flex-row items-center justify-center px-4 relative overflow-hidden" 
                       on:click={() => handlePlaceBet('any_craps')} 
                       on:contextmenu={(e) => handleRemoveBet('any_craps', e)} 
                       amount={bets.any_craps}
                     >
-                      <span class="text-sm font-black text-white drop-shadow-md leading-none">7:1</span>
-                      <div class="flex-1 flex justify-center">
-                        <span class="uppercase tracking-tighter leading-none text-xl font-black text-[#ff3b30] drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)] italic">ANY CRAPS</span>
-                      </div>
-                      <span class="text-sm font-black text-white drop-shadow-md leading-none">7:1</span>
+                      <span class="text-[11px] font-bold text-white/90 whitespace-nowrap tracking-tight">7 TO 1</span>
+                      <span class="text-xl text-white/90 mx-4 font-bold leading-none">·</span>
+                      <span class="text-2xl font-black text-[#d63a30] uppercase tracking-wide drop-shadow-[0_0_8px_rgba(214,58,48,0.4)]">ANY CRAPS</span>
+                      <span class="text-xl text-white/90 mx-4 font-bold leading-none">·</span>
+                      <span class="text-[11px] font-bold text-white/90 whitespace-nowrap tracking-tight">7 TO 1</span>
                     </BetSpot>
                   </div>
                 </div>
@@ -2012,10 +2042,10 @@
                 </div>
                 
                 <div class="flex-1 grid grid-cols-2 grid-rows-2 gap-1 mt-1">
-                  <BetSpot id="hop_2_2" type="dice" dice={[2,2]} label="2-2" className="bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" labelClassName="bg-[#1a4d2e] px-1.5 py-0.5 rounded border border-white/10" on:click={() => handlePlaceBet('hop_2_2')} on:contextmenu={() => handleRemoveBet('hop_2_2')} amount={bets.hop_2_2} />
-                  <BetSpot id="hop_4_4" type="dice" dice={[4,4]} label="4-4" reverse={true} className="bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" labelClassName="bg-[#1a4d2e] px-1.5 py-0.5 rounded border border-white/10" on:click={() => handlePlaceBet('hop_4_4')} on:contextmenu={() => handleRemoveBet('hop_4_4')} amount={bets.hop_4_4} />
-                  <BetSpot id="hop_3_3" type="dice" dice={[3,3]} label="3-3" className="bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" labelClassName="bg-[#1a4d2e] px-1.5 py-0.5 rounded border border-white/10" on:click={() => handlePlaceBet('hop_3_3')} on:contextmenu={() => handleRemoveBet('hop_3_3')} amount={bets.hop_3_3} />
-                  <BetSpot id="hop_5_5" type="dice" dice={[5,5]} label="5-5" reverse={true} className="bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" labelClassName="bg-[#1a4d2e] px-1.5 py-0.5 rounded border border-white/10" on:click={() => handlePlaceBet('hop_5_5')} on:contextmenu={() => handleRemoveBet('hop_5_5')} amount={bets.hop_5_5} />
+                  <BetSpot id="hop_2_2" type="dice" dice={[2,2]} label="2-2" className="bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" on:click={() => handlePlaceBet('hop_2_2')} on:contextmenu={() => handleRemoveBet('hop_2_2')} amount={bets.hop_2_2} />
+                  <BetSpot id="hop_4_4" type="dice" dice={[4,4]} label="4-4" reverse={true} className="bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" on:click={() => handlePlaceBet('hop_4_4')} on:contextmenu={() => handleRemoveBet('hop_4_4')} amount={bets.hop_4_4} />
+                  <BetSpot id="hop_3_3" type="dice" dice={[3,3]} label="3-3" className="bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" on:click={() => handlePlaceBet('hop_3_3')} on:contextmenu={() => handleRemoveBet('hop_3_3')} amount={bets.hop_3_3} />
+                  <BetSpot id="hop_5_5" type="dice" dice={[5,5]} label="5-5" reverse={true} className="bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" on:click={() => handlePlaceBet('hop_5_5')} on:contextmenu={() => handleRemoveBet('hop_5_5')} amount={bets.hop_5_5} />
                 </div>
               </div>
 
@@ -2031,19 +2061,19 @@
                   <!-- Col 1 (1-3, 1-4, 2-3, 2-4, 1-5) -->
                   <div class="flex-1 flex flex-col gap-1">
                     {#each [[1,3,"1-3"], [1,4,"1-4"], [2,3,"2-3"], [2,4,"2-4"], [1,5,"1-5"]] as [d1, d2, label]}
-                      <BetSpot id={`hop_${d1}_${d2}`} type="dice" dice={[d1, d2]} {label} className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" labelClassName="bg-[#1a4d2e] px-1.5 py-0.5 rounded border border-white/10" on:click={() => handlePlaceBet(`hop_${d1}_${d2}`)} on:contextmenu={() => handleRemoveBet(`hop_${d1}_${d2}`)} amount={bets[`hop_${d1}_${d2}`]} />
+                      <BetSpot id={`hop_${d1}_${d2}`} type="dice" dice={[d1, d2]} {label} className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" on:click={() => handlePlaceBet(`hop_${d1}_${d2}`)} on:contextmenu={() => handleRemoveBet(`hop_${d1}_${d2}`)} amount={bets[`hop_${d1}_${d2}`]} />
                     {/each}
                   </div>
                   <!-- Col 2 (1-6, 2-5, 3-4) -->
                   <div class="flex-1 flex flex-col gap-1 py-4">
                     {#each [[1,6,"1-6"], [2,5,"2-5"], [3,4,"3-4"]] as [d1, d2, label]}
-                      <BetSpot id={`hop_${d1}_${d2}`} type="dice" dice={[d1, d2]} {label} className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors flex-col gap-0 px-0" labelClassName="bg-[#1a4d2e] w-full text-center py-0.5 border-t border-white/10" on:click={() => handlePlaceBet(`hop_${d1}_${d2}`)} on:contextmenu={() => handleRemoveBet(`hop_${d1}_${d2}`)} amount={bets[`hop_${d1}_${d2}`]} />
+                      <BetSpot id={`hop_${d1}_${d2}`} type="dice" dice={[d1, d2]} {label} className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors flex-col gap-0 px-0" on:click={() => handlePlaceBet(`hop_${d1}_${d2}`)} on:contextmenu={() => handleRemoveBet(`hop_${d1}_${d2}`)} amount={bets[`hop_${d1}_${d2}`]} />
                     {/each}
                   </div>
                   <!-- Col 3 (2-6, 3-5, 3-6, 4-5, 4-6) -->
                   <div class="flex-1 flex flex-col gap-1">
                     {#each [[2,6,"2-6"], [3,5,"3-5"], [3,6,"3-6"], [4,5,"4-5"], [4,6,"4-6"]] as [d1, d2, label]}
-                      <BetSpot id={`hop_${d1}_${d2}`} type="dice" dice={[d1, d2]} {label} reverse={true} className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" labelClassName="bg-[#1a4d2e] px-1.5 py-0.5 rounded border border-white/10" on:click={() => handlePlaceBet(`hop_${d1}_${d2}`)} on:contextmenu={() => handleRemoveBet(`hop_${d1}_${d2}`)} amount={bets[`hop_${d1}_${d2}`]} />
+                      <BetSpot id={`hop_${d1}_${d2}`} type="dice" dice={[d1, d2]} {label} reverse={true} className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl hover:bg-emerald-700/50 transition-colors" on:click={() => handlePlaceBet(`hop_${d1}_${d2}`)} on:contextmenu={() => handleRemoveBet(`hop_${d1}_${d2}`)} amount={bets[`hop_${d1}_${d2}`]} />
                     {/each}
                   </div>
                 </div>
@@ -2113,10 +2143,11 @@
                   {/if}
                 </div>
 
-                <BetSpot id={`buy_${n}`} label="BUY" className="h-[16%] bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none" on:click={() => handlePlaceBet(`buy_${n}`)} on:contextmenu={(e) => handleRemoveBet(`buy_${n}`, e)} amount={bets[`buy_${n}`]} status={betStatus[`buy_${n}`]} isAutoOff={point === null} />
-                <BetSpot id={`place_${n}`} label={n === 6 ? 'SIX' : n === 9 ? 'NINE' : n} type="number" className="flex-1 bg-[#0a2e0a]/80 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.5),inset_0_0_15px_rgba(0,0,0,0.4)]" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} status={betStatus[`place_${n}`]} isAutoOff={point === null} />
+                <BetSpot id={`buy_${n}`} label="BUY" className="h-[16%] bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-xs" on:click={() => handlePlaceBet(`buy_${n}`)} on:contextmenu={(e) => handleRemoveBet(`buy_${n}`, e)} amount={bets[`buy_${n}`]} status={betStatus[`buy_${n}`]} />
+                <BetSpot id={`place_${n}`} label={n === 6 ? 'SIX' : n === 9 ? 'NINE' : n} type="number" className="flex-1 bg-[#0a2e0a]/80 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.5),inset_0_0_15px_rgba(0,0,0,0.4)]" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} status={betStatus[`place_${n}`]}>
+                </BetSpot>
                 <div class="h-[18%] flex gap-1 relative">
-                  <BetSpot id={`place_label_${n}`} label="PLACE" subLabel={formatOdds(n)} className="flex-1 bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-[9px]" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} hideChips={true} status={betStatus[`place_${n}`]} isAutoOff={point === null} />
+                  <BetSpot id={`place_label_${n}`} label="PLACE" className="flex-1 bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-xs" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} hideChips={true} status={betStatus[`place_${n}`]} />
                   
                   <!-- Come Bet established on this number -->
                   {#if bets[`come_${n}`]}
@@ -2234,7 +2265,7 @@
               <BetSpot id="take_odds" className="w-[25%] bg-[#1a4d2e] rounded-xl border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] flex items-center justify-center px-2" on:click={() => handlePlaceBet('take_odds')} on:contextmenu={(e) => handleRemoveBet('take_odds', e)} amount={bets.take_odds}>
                 <span class="text-[11px] font-black text-white leading-tight text-center uppercase tracking-tighter">TAKE<br/>ODDS</span>
               </BetSpot>
-              <BetSpot id="passline" className="flex-1 bg-[#1a4d2e] rounded-xl border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] flex items-center justify-center" on:click={() => handlePlaceBet('passline')} on:contextmenu={(e) => handleRemoveBet('passline', e)} amount={bets.passline} isLocked={point !== null}>
+              <BetSpot id="passline" isLocked={point !== null} className="flex-1 bg-[#1a4d2e] rounded-xl border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] flex items-center justify-center" on:click={() => handlePlaceBet('passline')} on:contextmenu={(e) => handleRemoveBet('passline', e)} amount={bets.passline}>
                 <span class="text-4xl font-serif italic text-white font-medium tracking-widest drop-shadow-lg">Pass Line</span>
               </BetSpot>
             </div>

@@ -12,6 +12,7 @@
     const scene = game.scene.scenes[0];
     
     chipPositions.forEach(pos => {
+      if (!pos) return;
       for (let i = 0; i < 3; i++) {
         const chip = scene.add.circle(pos.x, pos.y, 10, 0x9eff00, 0.8);
         scene.physics.add.existing(chip);
@@ -20,8 +21,8 @@
           targets: chip,
           x: balanceTarget.x,
           y: balanceTarget.y,
-          duration: 1500 + Math.random() * 1000, // Slowed down from 600-1000 to 1500-2500
-          ease: 'Cubic.easeOut', // Changed from Back.easeIn to Cubic.easeOut for a smoother landing
+          duration: 1500 + Math.random() * 1000,
+          ease: 'Cubic.easeOut',
           onComplete: () => chip.destroy()
         });
       }
@@ -33,6 +34,7 @@
     const scene = game.scene.scenes[0];
     
     chipPositions.forEach(pos => {
+      if (!pos) return;
       for (let i = 0; i < 3; i++) {
         const chip = scene.add.circle(pos.x, pos.y, 10, 0xff3b30, 0.8);
         scene.physics.add.existing(chip);
