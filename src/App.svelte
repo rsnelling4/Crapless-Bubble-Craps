@@ -431,7 +431,7 @@
     if (winOverlayTimer) clearTimeout(winOverlayTimer);
 
     const soundDuration = winSoundBuffer ? winSoundBuffer.duration * 1000 : 4500;
-    const duration = soundDuration * 0.8; // Count up over 80% of the sound duration
+    const duration = soundDuration * 0.95; // Count up over 95% of the sound duration (slowed down from 80%)
     const steps = 60;
     const increment = targetAmount / steps;
     let current = 0;
