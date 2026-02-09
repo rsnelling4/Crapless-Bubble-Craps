@@ -5,6 +5,7 @@
   import { gsap } from 'gsap';
 
   export let show = false;
+  export let rollDuration = 3.5; // Default duration in seconds
   
   const dispatch = createEventDispatcher();
 
@@ -319,7 +320,7 @@
         d.body.velocity.length() < 0.3 && d.body.angularVelocity.length() < 0.3
       );
       
-      const minimumTimeMet = Date.now() - rollStartTime > 3500;
+      const minimumTimeMet = Date.now() - rollStartTime > (rollDuration * 1000);
       
       if (allStopped && minimumTimeMet) {
         // Delay completion to ensure duration
@@ -390,10 +391,10 @@
         );
       });
 
-    // Earthquake animation - 3.5 seconds total (increased to match slower speed)
+    // Earthquake animation
       if (floorMesh) {
         gsap.to({}, {
-          duration: 3.5,
+          duration: rollDuration,
           onUpdate: function() {
             const progress = this.progress(); // 0 to 1
             const time = Date.now() * 0.016; // Slower oscillation speed as requested

@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
-  import { Settings, RotateCcw, Info, History } from 'lucide-svelte';
+  import { Settings, RotateCcw, Info, History, Volume2, VolumeX, Trophy, X, HelpCircle } from 'lucide-svelte';
+  import Auth from './lib/components/Auth.svelte';
   import BetSpot from './lib/components/BetSpot.svelte';
   import PhaserTable from './lib/components/PhaserTable.svelte';
   import Chip from './lib/components/Chip.svelte';
@@ -8,45 +9,255 @@
   import MoveBetPrompt from './lib/components/MoveBetPrompt.svelte';
   import CommissionPrompt from './lib/components/CommissionPrompt.svelte';
   import DiceBubble from './lib/components/DiceBubble.svelte';
+  import Leaderboard from './lib/components/Leaderboard.svelte';
+  import Help from './lib/components/Help.svelte';
 
   // --- Audio ---
   const audioContext = typeof window !== 'undefined' ? new (window.AudioContext || window.webkitAudioContext)() : null;
   let chipSoundBuffer = null;
+  let rollSoundBuffer = null;
+  let winSoundBuffer = null;
+  let loseSoundBuffer = null;
 
-  async function loadChipSound() {
+  async function loadSounds() {
     if (!audioContext) return;
+    const baseUrl = import.meta.env.BASE_URL || '/';
+
+    // Load Chip Sound
     try {
-      // Use relative path with BASE_URL for GitHub Pages compatibility
-      const baseUrl = import.meta.env.BASE_URL || '/';
       const soundUrl = `${baseUrl}poker_chip.mp3`.replace(/\/+/g, '/');
-      
       const response = await fetch(soundUrl);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const arrayBuffer = await response.arrayBuffer();
-      
-      // Modern promise-based decodeAudioData
-      try {
+      if (response.ok) {
+        const arrayBuffer = await response.arrayBuffer();
         chipSoundBuffer = await audioContext.decodeAudioData(arrayBuffer);
-      } catch (decodeError) {
-        // Fallback for older browsers
-        chipSoundBuffer = await new Promise((resolve, reject) => {
-          audioContext.decodeAudioData(arrayBuffer, resolve, reject);
-        });
       }
     } catch (e) {
-      console.error('Failed to load chip sound:', e.message || e);
+      console.error('Failed to load chip sound:', e);
+    }
+
+    // Load Roll Sound
+    try {
+      const soundUrl = `${baseUrl}roll.mp3`.replace(/\/+/g, '/');
+      const response = await fetch(soundUrl);
+      if (response.ok) {
+        const arrayBuffer = await response.arrayBuffer();
+        rollSoundBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      }
+    } catch (e) {
+      console.error('Failed to load roll sound:', e);
+    }
+
+    // Load Win Sound
+    try {
+      const soundUrl = `${baseUrl}win.mp3`.replace(/\/+/g, '/');
+      const response = await fetch(soundUrl);
+      if (response.ok) {
+        const arrayBuffer = await response.arrayBuffer();
+        winSoundBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      }
+    } catch (e) {
+      console.error('Failed to load win sound:', e);
+    }
+
+    // Load Lose Sound
+    try {
+      const soundUrl = `${baseUrl}lose.mp3`.replace(/\/+/g, '/');
+      const response = await fetch(soundUrl);
+      if (response.ok) {
+        const arrayBuffer = await response.arrayBuffer();
+        loseSoundBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      }
+    } catch (e) {
+      console.error('Failed to load lose sound:', e);
     }
   }
 
+  // --- Auth & Persistence ---
+  function getDB() {
+    return JSON.parse(localStorage.getItem('bubble_craps_db') || '{"users":[]}');
+  }
+
+  function saveDB(db) {
+    localStorage.setItem('bubble_craps_db', JSON.stringify(db));
+  }
+
+  function handleSignup(event) {
+    const { username, password, nickname } = event.detail;
+    const db = getDB();
+    if (db.users.find(u => u.username === username)) {
+      alert('Username already exists');
+      return;
+    }
+    const newUser = { 
+      username, 
+      password, 
+      nickname, 
+      balance: 300,
+      highestBalance: 300,
+      largestWin: 0,
+      largestLoss: 0,
+      resetCount: 0
+    };
+    db.users.push(newUser);
+    saveDB(db);
+    login(newUser);
+  }
+
+  function handleLogin(event) {
+    const { username, password } = event.detail;
+    const db = getDB();
+    const foundUser = db.users.find(u => u.username === username && u.password === password);
+    if (foundUser) {
+      // Ensure existing users have stats fields
+      if (foundUser.highestBalance === undefined) foundUser.highestBalance = foundUser.balance;
+      if (foundUser.largestWin === undefined) foundUser.largestWin = 0;
+      if (foundUser.largestLoss === undefined) foundUser.largestLoss = 0;
+      if (foundUser.resetCount === undefined) foundUser.resetCount = 0;
+      login(foundUser);
+    } else {
+      alert('Invalid username or password');
+    }
+  }
+
+  function handleGuest() {
+    login({ 
+      username: 'Guest', 
+      nickname: 'Guest', 
+      mode: 'guest', 
+      balance: 300,
+      highestBalance: 300,
+      largestWin: 0,
+      largestLoss: 0,
+      resetCount: 0
+    });
+  }
+
+  function login(userData) {
+    user = userData;
+    balance = userData.balance;
+    showAuth = false;
+    // Set cookie-like persistence in localStorage for session
+    localStorage.setItem('bubble_craps_session', JSON.stringify({
+      username: userData.username,
+      mode: userData.mode || 'user'
+    }));
+  }
+
+  function logout() {
+    if (user && user.mode !== 'guest') {
+      saveProgress();
+    }
+    user = null;
+    showAuth = true;
+    localStorage.removeItem('bubble_craps_session');
+  }
+
+  function saveProgress(rollStats = null) {
+    if (!user || user.mode === 'guest') return;
+    const db = getDB();
+    const userIdx = db.users.findIndex(u => u.username === user.username);
+    if (userIdx !== -1) {
+      db.users[userIdx].balance = balance;
+      
+      // Update stats
+      if (balance > (db.users[userIdx].highestBalance || 0)) {
+        db.users[userIdx].highestBalance = balance;
+      }
+      
+      if (rollStats) {
+        if (rollStats.win > (db.users[userIdx].largestWin || 0)) {
+          db.users[userIdx].largestWin = rollStats.win;
+        }
+        if (rollStats.loss > (db.users[userIdx].largestLoss || 0)) {
+          db.users[userIdx].largestLoss = rollStats.loss;
+        }
+      }
+      
+      saveDB(db);
+      // Update local user object too
+      user = { ...db.users[userIdx], mode: 'user' };
+    }
+  }
+
+  function resetBalance() {
+    if (!user) return;
+    balance = 300;
+    if (user.mode !== 'guest') {
+      const db = getDB();
+      const userIdx = db.users.findIndex(u => u.username === user.username);
+      if (userIdx !== -1) {
+        db.users[userIdx].resetCount = (db.users[userIdx].resetCount || 0) + 1;
+        db.users[userIdx].balance = 300;
+        saveDB(db);
+        user = { ...db.users[userIdx], mode: 'user' };
+      }
+    } else {
+      user.resetCount = (user.resetCount || 0) + 1;
+      user.balance = 300;
+    }
+    message = "BALANCE RESET TO $300";
+    showSettings = false;
+  }
+
   onMount(() => {
-    loadChipSound();
+    loadSounds();
+    
+    // Check for existing session
+    const session = JSON.parse(localStorage.getItem('bubble_craps_session'));
+    if (session) {
+      if (session.mode === 'guest') {
+        handleGuest();
+      } else {
+        const db = getDB();
+        const foundUser = db.users.find(u => u.username === session.username);
+        if (foundUser) login(foundUser);
+      }
+    }
   });
-  
+
+  $: if (user && user.mode !== 'guest') {
+    // Auto-save balance changes for registered users
+    saveProgress();
+  }
+
   function playChipSound(type = 'place') {
-    if (!audioContext) return;
+    if (!audioContext || isMuted) return;
+
+    if (type === 'roll') {
+      if (!rollSoundBuffer) return;
+      const source = audioContext.createBufferSource();
+      source.buffer = rollSoundBuffer;
+      const gainNode = audioContext.createGain();
+      source.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      gainNode.gain.setValueAtTime(0.6, audioContext.currentTime);
+      source.start(0);
+      return;
+    }
+
+    if (type === 'win') {
+      if (!winSoundBuffer) return;
+      const source = audioContext.createBufferSource();
+      source.buffer = winSoundBuffer;
+      const gainNode = audioContext.createGain();
+      source.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      gainNode.gain.setValueAtTime(0.7, audioContext.currentTime);
+      source.start(0);
+      return;
+    }
+
+    if (type === 'loss') {
+      if (!loseSoundBuffer) return;
+      const source = audioContext.createBufferSource();
+      source.buffer = loseSoundBuffer;
+      const gainNode = audioContext.createGain();
+      source.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      gainNode.gain.setValueAtTime(0.7, audioContext.currentTime);
+      source.start(0);
+      return;
+    }
 
     // Use downloaded sound for select/place/remove/win/loss
     if (chipSoundBuffer) {
@@ -124,7 +335,13 @@
   let phaserTableRef;
 
   // --- State ---
-  let balance = 218.39;
+  let user = null; // { username, nickname, mode: 'user' | 'guest', highestBalance, largestWin, largestLoss, resetCount }
+  let showAuth = true;
+  let showSettings = false;
+  let showLeaderboard = false;
+  let showHelp = false;
+  let isMuted = false;
+  let balance = 300.00; // Starting balance for new sessions
   let selectedChip = 5;
   let activeTab = 'hardways';
   let puckResetStatus = 0; // 0 = default, 1 = can reset, 2 = manual reset triggered
@@ -193,6 +410,8 @@
   let lastRollWinnings = 0;
   let rollerTally = 0;
   let previousWasSevenOut = false;
+  let showRecap = false;
+  let roundRecapText = "";
 
   $: console.log('Stats Update:', { lastRollTotalBet, lastRollWinnings, rollerTally });
 
@@ -206,11 +425,11 @@
     showWinOverlay = true;
     showLossOverlay = false;
     milestoneFlash = false;
+    playChipSound('win');
     
     if (countInterval) clearInterval(countInterval);
     if (winOverlayTimer) clearTimeout(winOverlayTimer);
 
-    // Use win sound duration if available, else 4.5s
     const soundDuration = winSoundBuffer ? winSoundBuffer.duration * 1000 : 4500;
     const duration = soundDuration * 0.8; // Count up over 80% of the sound duration
     const steps = 60;
@@ -237,7 +456,7 @@
 
     winOverlayTimer = setTimeout(() => {
       showWinOverlay = false;
-    }, 4500); // Extended to account for count-up
+    }, soundDuration); // Sync with sound length or fallback
   }
 
   function triggerLossOverlay(targetAmount) {
@@ -250,6 +469,7 @@
     showLossOverlay = true;
     showWinOverlay = false;
     milestoneFlash = false;
+    playChipSound('loss');
     
     if (countInterval) clearInterval(countInterval);
     if (lossOverlayTimer) clearTimeout(lossOverlayTimer);
@@ -585,6 +805,7 @@
 
   function handleDiceRolled(event) {
     const { dice: roll, total } = event.detail;
+    showRecap = false;
     
     // Check if this roll will establish a point (before processResults updates it)
     const establishesPoint = (point === null && total !== 7);
@@ -597,10 +818,8 @@
     // Process results
     processResults(total);
     
-    // Keep icons bouncing for a moment so user can see result
-    setTimeout(() => {
-      rolling = false;
-    }, 1000);
+    // Stop rolling state immediately so result shows in UI
+    rolling = false;
   }
 
   function handleManualRoll() {
@@ -646,9 +865,12 @@
 
   function processResults(total) {
     let winnings = 0;
+    let rollProfit = 0;
     const currentBets = { ...bets };
     const winningBets = [];
     const losingBets = [];
+    const isPointSet = point !== null;
+    const wasSevenOut = previousWasSevenOut;
 
     // Capture total bet at start of roll
     lastRollTotalBet = Object.keys(bets).reduce((sum, id) => sum + (bets[id] || 0), 0);
@@ -691,6 +913,7 @@
         let multiplier = (total === 2 || total === 12) ? 2 : 1;
         const win = currentBets.field * multiplier;
         winnings += currentBets.field + win;
+        rollProfit += win;
         winningBets.push('field');
         lastRollResult += `Field $${win.toFixed(2)} WIN. `;
         delete bets.field;
@@ -706,6 +929,7 @@
       if (total === 7) {
         const win = currentBets.any_7 * 4;
         winnings += currentBets.any_7 + win;
+        rollProfit += win;
         winningBets.push('any_7');
         lastRollResult += `Any 7 $${win.toFixed(2)} WIN. `;
       } else {
@@ -721,6 +945,7 @@
       if ([2, 3, 12].includes(total)) {
         const win = amount * 7;
         winnings += amount + win;
+        rollProfit += win;
         if (currentBets.any_craps) winningBets.push('any_craps');
         if (currentBets.bet_c) winningBets.push('bet_c');
         lastRollResult += `Craps $${win.toFixed(2)} WIN. `;
@@ -739,6 +964,7 @@
       if (total === 11) {
         const win = amount * 15;
         winnings += amount + win;
+        rollProfit += win;
         if (currentBets.bet_e) winningBets.push('bet_e');
         if (currentBets.horn_11) winningBets.push('horn_11');
         lastRollResult += `Yo-11 $${win.toFixed(2)} WIN. `;
@@ -759,6 +985,7 @@
         if (total === 2 || total === 12) win = quarter * 30 - (3 * quarter);
         else if (total === 3 || total === 11) win = quarter * 15 - (3 * quarter);
         winnings += quarter + win;
+        rollProfit += win;
         winningBets.push('horn_bet');
         lastRollResult += `Horn $${win.toFixed(2)} WIN. `;
       } else {
@@ -775,6 +1002,7 @@
         if ([2, 3, 12].includes(total)) win = currentBets.bet_ce * 3;
         else if (total === 11) win = currentBets.bet_ce * 7;
         winnings += currentBets.bet_ce + win;
+        rollProfit += win;
         winningBets.push('bet_ce');
         lastRollResult += `C&E $${win.toFixed(2)} WIN. `;
       } else {
@@ -791,6 +1019,7 @@
         if (total === n) {
           const win = currentBets[id] * ((n === 2 || n === 12) ? 30 : 15);
           winnings += currentBets[id] + win;
+          rollProfit += win;
           winningBets.push(id);
           lastRollResult += `Horn ${n} $${win.toFixed(2)} WIN. `;
         } else {
@@ -811,6 +1040,7 @@
         if ((currentRoll[0] === d1 && currentRoll[1] === d2) || (currentRoll[0] === d2 && currentRoll[1] === d1)) {
           const win = betAmount * ((d1 === d2) ? 30 : 15);
           winnings += betAmount + win;
+          rollProfit += win;
           winningBets.push(id);
           lastRollResult += `Hop ${d1}/${d2} $${win.toFixed(2)} WIN. `;
         } else {
@@ -828,6 +1058,7 @@
         if (total === n && currentRoll[0] === currentRoll[1]) {
           const win = currentBets[betId] * hardwayOdds[n];
           winnings += currentBets[betId] + win;
+          rollProfit += win;
           winningBets.push(betId);
           lastRollResult += `Hard ${n} $${win.toFixed(2)} WIN. `;
           delete bets[betId];
@@ -845,6 +1076,7 @@
         if (currentBets.passline) {
           const win = currentBets.passline;
           winnings += (currentBets.passline + win);
+          rollProfit += win;
           winningBets.push('passline');
           lastRollResult += `Pass Line $${win.toFixed(2)} WIN. `;
         }
@@ -879,6 +1111,7 @@
         if (total === 7) {
           const win = currentBets.come;
           winnings += (currentBets.come + win);
+          rollProfit += win;
           winningBets.push('come');
           lastRollResult += `Come $${win.toFixed(2)} WIN. `;
           delete bets.come;
@@ -898,6 +1131,7 @@
           if (total === n) {
             const win = currentBets[comeId];
             winnings += (currentBets[comeId] + win);
+            rollProfit += win;
             winningBets.push(comeId);
             lastRollResult += `Come ${n} $${win.toFixed(2)} WIN. `;
             delete bets[comeId];
@@ -913,12 +1147,14 @@
         if (currentBets.passline) {
           const win = currentBets.passline;
           winnings += (currentBets.passline + win);
+          rollProfit += win;
           winningBets.push('passline');
           lastRollResult += `Pass Line $${win.toFixed(2)} WIN. `;
         }
         if (currentBets.take_odds && isBetActive('take_odds')) {
           const win = currentBets.take_odds * trueOdds[point];
           winnings += (currentBets.take_odds + win);
+          rollProfit += win;
           winningBets.push('take_odds');
           lastRollResult += `Odds $${win.toFixed(2)} WIN. `;
         }
@@ -959,6 +1195,7 @@
         if (total === n) {
           const win = Math.floor(currentBets[placeId] * placeOdds[n]);
           winnings += win; // Only add profit, bet stays
+          rollProfit += win;
           winningBets.push(placeId);
           lastRollResult += `Place ${n} $${win.toFixed(2)} WIN. `;
         } else if (total === 7) {
@@ -973,6 +1210,7 @@
           const commission = Math.ceil(winAmount * 0.05);
           const win = winAmount - commission;
           winnings += win; // Only add profit, bet stays
+          rollProfit += win;
           winningBets.push(buyId);
           lastRollResult += `Buy ${n} $${win.toFixed(2)} WIN (Comm $${commission}). `;
         } else if (total === 7) {
@@ -994,6 +1232,7 @@
       if (bets.low_rolls && lowSet.every(n => luckyRollerHits.has(n))) {
         const win = bets.low_rolls * 30;
         winnings += bets.low_rolls + win;
+        rollProfit += win;
         winningBets.push('low_rolls');
         delete bets.low_rolls;
         message = "LUCKY ROLLER LOW WIN!";
@@ -1002,6 +1241,7 @@
       if (bets.high_rolls && highSet.every(n => luckyRollerHits.has(n))) {
         const win = bets.high_rolls * 30;
         winnings += bets.high_rolls + win;
+        rollProfit += win;
         winningBets.push('high_rolls');
         delete bets.high_rolls;
         message = "LUCKY ROLLER HIGH WIN!";
@@ -1010,6 +1250,7 @@
       if (bets.roll_em_all && allSet.every(n => luckyRollerHits.has(n))) {
         const win = bets.roll_em_all * 155;
         winnings += bets.roll_em_all + win;
+        rollProfit += win;
         winningBets.push('roll_em_all');
         delete bets.roll_em_all;
         message = "ROLL 'EM ALL WIN!";
@@ -1020,16 +1261,25 @@
     // Finalize roll stats and tally
     lastRollWinnings = winnings;
     
-    // Net result of THIS ROLL: 
-    // (Amount returned to player) - (Amount they had at risk at the start of the roll)
-    const netRoll = lastRollWinnings - lastRollTotalBet;
+    // Calculate net result for Shooter P/L: (Total Profits) - (Total Actual Losses)
+    const rollLoss = losingBets.reduce((sum, id) => sum + (currentBets[id] || 0), 0);
+    const netRoll = rollProfit - rollLoss;
     
     // Update tally
-    if (previousWasSevenOut && point === null) {
-      rollerTally = netRoll;
-      previousWasSevenOut = false;
+    if (wasSevenOut && !isPointSet) {
+       // This was the come-out roll AFTER a seven out, so reset the tally
+       rollerTally = netRoll;
+       previousWasSevenOut = false;
     } else {
-      rollerTally += netRoll;
+       // Normal roll or the Seven Out roll itself
+       rollerTally += netRoll;
+    }
+
+    // Check for Round Recap (Seven Out)
+    if (total === 7 && isPointSet) {
+       showRecap = true;
+       roundRecapText = `SHOOTER SEVEN-OUT! ROUND P/L: ${rollerTally >= 0 ? '+' : ''}$${Math.abs(rollerTally).toFixed(2)}`;
+       // The previousWasSevenOut flag is already set in the point block above
     }
 
     // Force reactivity for all stats variables
@@ -1102,6 +1352,9 @@
     balance += winnings;
     bets = bets;
     if (winnings > 0) message = `WINNER! $${winnings.toFixed(2)}`;
+
+    // Save progress with roll stats
+    saveProgress({ win: winnings, loss: rollLoss });
   }
 
   function handleRemoveBet(id, event) {
@@ -1162,6 +1415,111 @@
       style="background-image: radial-gradient(circle at 50% 50%, #1a4d2e 0%, #0a2e0a 100%)">
   
   <PhaserTable bind:this={phaserTableRef} roll={currentRoll} />
+
+  {#if showAuth}
+    <Auth 
+      on:login={handleLogin} 
+      on:signup={handleSignup} 
+      on:guest={handleGuest} 
+    />
+  {/if}
+
+  {#if showSettings}
+    <div class="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-xl animate-in fade-in duration-300">
+      <div class="w-full max-w-sm p-8 bg-[#1a4d2e] rounded-3xl border-2 border-emerald-400/30 shadow-[0_0_50px_rgba(0,0,0,0.8),inset_0_0_30px_rgba(0,0,0,0.4)] relative overflow-hidden group">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8 relative z-10">
+          <div class="flex items-center gap-3">
+            <div class="p-2 rounded-xl bg-black/40 border border-white/10 text-emerald-400">
+              <Settings size={24} />
+            </div>
+            <h2 class="text-2xl font-black text-white tracking-tighter uppercase italic">Settings</h2>
+          </div>
+          <button 
+            on:click={() => showSettings = false}
+            class="p-2 rounded-xl bg-black/40 border border-white/10 text-zinc-400 hover:text-white transition-all hover:scale-110"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div class="space-y-6 relative z-10">
+          <!-- Mute Sounds -->
+          <div class="flex items-center justify-between p-4 bg-black/40 rounded-2xl border border-white/5 shadow-inner">
+            <div class="flex items-center gap-3">
+              <div class="p-2 rounded-lg {isMuted ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'}">
+                {#if isMuted}
+                  <VolumeX size={20} />
+                {:else}
+                  <Volume2 size={20} />
+                {/if}
+              </div>
+              <div>
+                <span class="block text-sm font-black text-white uppercase tracking-tight">Sound Effects</span>
+                <span class="text-[10px] font-medium text-zinc-500 uppercase">{isMuted ? 'Muted' : 'Active'}</span>
+              </div>
+            </div>
+            <button 
+              on:click={() => isMuted = !isMuted}
+              class="w-12 h-6 rounded-full transition-colors relative {isMuted ? 'bg-red-500/40' : 'bg-emerald-500/40'} border border-white/10"
+            >
+              <div class="absolute top-1 w-4 h-4 rounded-full bg-white shadow-lg transition-all {isMuted ? 'left-1' : 'left-7'}"></div>
+            </button>
+          </div>
+
+          <!-- Reset Balance -->
+          <div class="p-4 bg-black/40 rounded-2xl border border-white/5 shadow-inner">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="p-2 rounded-lg bg-yellow-500/20 text-yellow-500">
+                <RotateCcw size={20} />
+              </div>
+              <div>
+                <span class="block text-sm font-black text-white uppercase tracking-tight">Reset Bankroll</span>
+                <span class="text-[10px] font-medium text-zinc-500 uppercase">Return to $300.00</span>
+              </div>
+            </div>
+            <button 
+              on:click={resetBalance}
+              class="w-full py-3 bg-white hover:bg-zinc-200 text-black font-black uppercase tracking-widest text-xs rounded-xl transition-all active:scale-[0.98] shadow-lg"
+            >
+              Confirm Reset
+            </button>
+          </div>
+
+          <!-- Game Help -->
+          <button 
+            on:click={() => {
+              showSettings = false;
+              showHelp = true;
+            }}
+            class="w-full p-4 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-2xl border border-emerald-500/20 transition-all flex items-center gap-4 group"
+          >
+            <div class="p-2 rounded-lg bg-emerald-500/20 text-emerald-400 group-hover:scale-110 transition-transform">
+              <HelpCircle size={20} />
+            </div>
+            <div class="text-left">
+              <span class="block text-sm font-black text-white uppercase tracking-tight">How to Play</span>
+              <span class="text-[10px] font-medium text-zinc-500 uppercase">Rules & Payouts</span>
+            </div>
+          </button>
+        </div>
+
+        <!-- Background Glow -->
+        <div class="absolute -bottom-24 -left-24 w-48 h-48 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none"></div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showLeaderboard}
+    <Leaderboard 
+      users={getDB().users} 
+      on:close={() => showLeaderboard = false} 
+    />
+  {/if}
+
+  {#if showHelp}
+    <Help on:close={() => showHelp = false} />
+  {/if}
 
   <!-- Win Overlay -->
   {#if showWinOverlay}
@@ -1247,13 +1605,63 @@
   {/if}
   
   <!-- Header / Top Info -->
-  <div class="h-12 flex items-center justify-center px-4 bg-black/40 border-b border-white/10 shrink-0">
-    <div class="text-center flex items-center gap-6">
-      <div class="flex flex-col items-center min-w-[200px]">
-        <span class="text-xs font-black uppercase tracking-widest {rolling ? 'text-red-500 animate-pulse' : (!betsAreValid ? 'text-red-500' : 'text-white/80')}">
-          {rolling ? 'NO MORE BETS' : (!betsAreValid ? 'BETS ARE NOT VALID YET!' : (lastRollResult || message))}
-        </span>
+  <div class="h-12 flex items-center justify-between px-6 bg-black/60 border-b border-white/10 shrink-0 backdrop-blur-md">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 p-2 rounded-xl bg-black/40 border border-white/10 shadow-inner">
+        <img src="https://img.icons8.com/color/48/dice.png" alt="logo" class="w-6 h-6 drop-shadow-md" />
+        <img src="https://img.icons8.com/color/48/dice.png" alt="logo" class="w-6 h-6 drop-shadow-md" />
       </div>
+      <h1 class="text-xl font-black text-white tracking-tighter uppercase italic">Crapless Bubble <span class="text-emerald-400">Craps</span></h1>
+    </div>
+
+    <!-- Welcome Message -->
+    {#if user}
+      <div class="absolute left-1/2 -translate-x-1/2 flex items-center gap-2 animate-in fade-in duration-500">
+        <span class="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Welcome</span>
+        <span class="text-sm font-black text-emerald-400 uppercase tracking-tight italic drop-shadow-lg">
+          {user.nickname || user.username}
+        </span>
+        {#if user.mode !== 'guest'}
+          <button on:click={logout} class="ml-2 text-[8px] font-black text-zinc-500 hover:text-red-400 uppercase transition-colors">
+            [ Logout ]
+          </button>
+        {/if}
+      </div>
+    {/if}
+
+    <div class="flex items-center gap-4">
+      <div class="flex items-center gap-3 bg-black/40 px-4 py-1.5 rounded-full border border-white/5 shadow-inner">
+        <div class="flex flex-col items-end">
+          <span class="text-[9px] font-black text-zinc-500 uppercase tracking-widest leading-none">Game Status</span>
+          <div class="flex items-center gap-2">
+            {#if rolling}
+              <div class="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse"></div>
+            {:else if point}
+              <div class="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
+            {:else}
+              <div class="w-1.5 h-1.5 rounded-full bg-white/30"></div>
+            {/if}
+            <span class="text-xs font-black {rolling ? 'text-yellow-400' : (point ? 'text-emerald-400' : 'text-white/60')} tracking-tight uppercase">
+              {rolling ? 'DICE ROLLING' : (point ? `POINT IS ${point}` : 'COME OUT ROLL')}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <button 
+        on:click={() => showLeaderboard = true}
+        class="flex items-center gap-2 bg-black/40 px-4 py-2 rounded-full border border-white/5 shadow-inner text-zinc-400 hover:text-white transition-all active:scale-95 group"
+      >
+        <Trophy size={16} class="text-yellow-500 group-hover:scale-110 transition-transform" />
+        <span class="text-[10px] font-black uppercase tracking-widest">Leaderboard</span>
+      </button>
+
+      <button 
+        on:click={() => showSettings = true}
+        class="p-1.5 rounded-full bg-black/40 border border-white/10 text-zinc-400 hover:text-white transition-colors shadow-inner"
+      >
+        <Settings size={18} />
+      </button>
     </div>
   </div>
 
@@ -1279,8 +1687,8 @@
           <!-- Center: Large Rolling Dice Visualization -->
           <div class="flex-1 flex justify-center items-center px-2 relative h-full">
             <div class="flex gap-2 items-center scale-110">
-              <img src="https://img.icons8.com/fluency/96/dice.png" alt="dice" class="w-16 h-16 drop-shadow-[0_10px_15px_rgba(0,0,0,0.5)] rotate-[15deg] {rolling ? 'animate-bounce' : 'opacity-90'} grayscale brightness-125 contrast-110" />
-              <img src="https://img.icons8.com/fluency/96/dice.png" alt="dice" class="w-16 h-16 drop-shadow-[0_10px_15px_rgba(0,0,0,0.5)] -rotate-[15deg] {rolling ? 'animate-bounce [animation-delay:0.1s]' : 'opacity-90'} grayscale brightness-125 contrast-110" />
+              <img src="https://img.icons8.com/color/96/dice.png" alt="dice" class="w-16 h-16 drop-shadow-[0_10px_15px_rgba(0,0,0,0.5)] rotate-[15deg] {rolling ? 'animate-bounce' : 'opacity-90'} brightness-110 contrast-110" />
+              <img src="https://img.icons8.com/color/96/dice.png" alt="dice" class="w-16 h-16 drop-shadow-[0_10px_15px_rgba(0,0,0,0.5)] -rotate-[15deg] {rolling ? 'animate-bounce [animation-delay:0.1s]' : 'opacity-90'} brightness-110 contrast-110" />
             </div>
           </div>
 
@@ -1338,7 +1746,11 @@
       <DiceBubble 
         bind:this={diceBubbleRef}
         show={true}
-        on:rollStart={() => rolling = true}
+        rollDuration={rollSoundBuffer ? rollSoundBuffer.duration : 3.5}
+        on:rollStart={() => {
+          rolling = true;
+          playChipSound('roll');
+        }}
         on:rolled={handleDiceRolled}
         on:close={() => {
           showDiceBubble = false;
@@ -1347,42 +1759,61 @@
       />
 
       <!-- Info Block (Moved from Header) -->
-      <div class="flex-1 min-w-[500px] bg-[#1a4d2e] rounded-2xl border-2 border-emerald-400/50 shadow-[0_0_40px_rgba(0,0,0,0.6),inset_0_0_30px_rgba(0,0,0,0.4)] flex items-center justify-between px-4 overflow-hidden relative group">
+      <div class="flex-1 min-w-[500px] bg-[#1a4d2e] rounded-2xl border-2 border-emerald-400/50 shadow-[0_0_40px_rgba(0,0,0,0.6),inset_0_0_30px_rgba(0,0,0,0.4)] flex flex-col justify-center gap-1.5 px-4 overflow-hidden relative group">
         <div class="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent"></div>
         
-        <div class="flex items-center gap-4 relative z-10 flex-1 min-w-0">
-          <!-- Compact Stats Box -->
-          <div class="flex items-center bg-black/40 rounded-xl border border-white/10 shadow-[inset_0_2px_8px_rgba(0,0,0,0.5)] divide-x divide-white/10 shrink-0">
-            <div class="flex flex-col items-center px-3 py-1">
-              <span class="text-[8px] font-black text-zinc-500 uppercase tracking-tighter mb-0">Last Bet</span>
-              <span class="text-xs font-black text-white leading-tight">${lastRollTotalBet.toFixed(2)}</span>
+        <div class="flex items-center justify-between w-full relative z-10">
+          <div class="flex items-center gap-4 flex-1 min-w-0">
+            <!-- Compact Stats Box -->
+            <div class="flex items-center bg-black/40 rounded-xl border border-white/10 shadow-[inset_0_2px_8px_rgba(0,0,0,0.5)] divide-x divide-white/10 shrink-0 overflow-hidden">
+              <div class="flex flex-col items-center px-3 py-1 bg-white/[0.02]">
+                <span class="text-[8px] font-black text-zinc-500 uppercase tracking-tighter mb-0.5">Last Bet</span>
+                <span class="text-sm font-black text-white leading-tight tabular-nums">${lastRollTotalBet.toFixed(2)}</span>
+              </div>
+              <div class="flex flex-col items-center px-3 py-1 bg-white/[0.04]">
+                <span class="text-[8px] font-black text-zinc-500 uppercase tracking-tighter mb-0.5">Last Win</span>
+                <span class="text-sm font-black text-emerald-400 leading-tight tabular-nums">${lastRollWinnings.toFixed(2)}</span>
+              </div>
+              <div class="flex flex-col items-center px-3 py-1 min-w-[100px] bg-white/[0.06]">
+                <span class="text-[8px] font-black text-zinc-400 uppercase tracking-tighter mb-0.5">Shooter P/L</span>
+                <span class="text-sm font-black {rollerTally >= 0 ? 'text-emerald-400' : 'text-red-400'} leading-tight tabular-nums">
+                  {rollerTally >= 0 ? '+' : ''}${Math.abs(rollerTally).toFixed(2)}
+                </span>
+              </div>
             </div>
-            <div class="flex flex-col items-center px-3 py-1">
-              <span class="text-[8px] font-black text-zinc-500 uppercase tracking-tighter mb-0">Last Win</span>
-              <span class="text-xs font-black text-emerald-400 leading-tight">${lastRollWinnings.toFixed(2)}</span>
-            </div>
-            <div class="flex flex-col items-center px-3 py-1 min-w-[90px] bg-white/5">
-              <span class="text-[8px] font-black text-zinc-400 uppercase tracking-tighter mb-0">Shooter P/L</span>
-              <span class="text-xs font-black {rollerTally >= 0 ? 'text-emerald-400' : 'text-red-400'} leading-tight">
-                {rollerTally >= 0 ? '+' : ''}${Math.abs(rollerTally).toFixed(2)}
-              </span>
+            
+            <div class="flex flex-col playable-balance shrink-0 ml-2">
+              <span class="text-[9px] font-black text-zinc-400 uppercase leading-none tracking-tighter">Balance</span>
+              <span class="text-xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">${balance.toFixed(2)}</span>
             </div>
           </div>
-          
-          <div class="flex flex-col playable-balance shrink-0 ml-2">
-            <span class="text-[9px] font-black text-zinc-400 uppercase leading-none tracking-tighter">Balance</span>
-            <span class="text-xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">${balance.toFixed(2)}</span>
+
+          <div class="flex items-center gap-3 shrink-0">
+            <div class="flex flex-col items-end">
+              <span class="text-[9px] font-black text-zinc-400 uppercase leading-none tracking-tighter">Current Bet</span>
+              <span class="text-xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">${totalBet.toFixed(2)}</span>
+            </div>
           </div>
         </div>
 
-        <div class="flex items-center gap-3 relative z-10 shrink-0">
-          <div class="flex flex-col items-end">
-            <span class="text-[9px] font-black text-zinc-400 uppercase leading-none tracking-tighter">Current Bet</span>
-            <span class="text-xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">${totalBet.toFixed(2)}</span>
+        <!-- Result / Recap Row -->
+        <div class="w-full bg-black/40 rounded-xl border border-white/10 shadow-[inset_0_2px_8px_rgba(0,0,0,0.5)] px-4 py-1.5 relative z-10 flex items-center justify-center min-h-[36px] transition-all duration-300
+          {rolling ? 'bg-yellow-500/10 border-yellow-500/30' : (showRecap ? 'bg-red-500/20 border-red-500/40' : (lastRollResult.includes('WIN') ? 'bg-emerald-500/10 border-emerald-500/30' : ''))}">
+          
+          <div class="flex items-center gap-2">
+            {#if rolling}
+              <div class="w-2 h-2 rounded-full bg-yellow-400 animate-ping"></div>
+            {:else if showRecap}
+              <div class="w-2 h-2 rounded-full bg-red-500"></div>
+            {:else if lastRollResult.includes('WIN')}
+              <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+            {/if}
+
+            <span class="text-[11px] font-black uppercase tracking-widest text-center
+              {rolling ? 'text-yellow-400' : (showRecap ? 'text-yellow-400' : (lastRollResult.includes('WIN') ? 'text-emerald-400' : 'text-white/70'))}">
+              {rolling ? 'DICE ARE IN THE AIR...' : (showRecap ? roundRecapText : (lastRollResult || message))}
+            </span>
           </div>
-          <button class="p-1.5 rounded-full bg-black/40 border border-white/10 text-zinc-400 hover:text-white transition-colors shadow-inner">
-            <Settings size={18} />
-          </button>
         </div>
       </div>
     </div>

@@ -1,134 +1,96 @@
 <script>
-  import Chip from './Chip.svelte';
-  export let label = "";
-  export let subLabel = "";
-  export let odds = "";
-  export let active = false;
-  export let amount = 0;
-  export let className = "";
-  export let type = "default"; // 'number', 'field', 'come', 'pass', 'prop', 'dice'
-  export let dice = []; // Array of numbers [1, 1] etc
-  export let dicePosition = "left"; // 'left', 'right', 'top', 'bottom'
-  
-  export let reverse = false; // Reverse order of dice/label
-  export let labelClassName = ""; // Custom label styling
+    export let label = "";
+    export let subLabel = "";
+    export let odds = "";
+    export let amount = 0;
+    export let onClick = () => {};
+    export let onRightClick = () => {};
+    export let className = "";
+    export let isActive = false;
+    export let color = "green";
 
-  function getChipValue(amt) {
-    if (amt >= 100) return 100;
-    if (amt >= 50) return 50;
-    if (amt >= 25) return 25;
-    if (amt >= 10) return 10;
-    if (amt >= 5) return 5;
-    if (amt >= 3) return 3;
-    if (amt >= 2) return 2;
-    return 1;
-  }
+    export let glow = false;
 
-  const diceDots = {
-    1: [4],
-    2: [0, 8],
-    3: [0, 4, 8],
-    4: [0, 2, 6, 8],
-    5: [0, 2, 4, 6, 8],
-    6: [0, 2, 3, 5, 6, 8]
-  };
+    const colorClasses = {
+        green: isActive ? 'bg-emerald-500/20 border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.4)]' : 'bg-emerald-950/40 hover:bg-emerald-900/60 border-emerald-500/20',
+        zinc: 'bg-zinc-900/60 hover:bg-zinc-800/80 border-white/10 backdrop-blur-md',
+        blue: 'bg-blue-950/40 hover:bg-blue-900/60 border-blue-500/20',
+        red: 'bg-red-950/40 hover:bg-red-900/60 border-red-500/20',
+        gold: 'bg-amber-950/40 hover:bg-amber-900/60 border-amber-500/20',
+    };
 
-  export let diceSize = "w-8 h-8";
-  export let status = "on"; // 'on', 'off'
-  export let isAutoOff = false;
-  export let isLocked = false;
-  export let payout = ""; // Special payout display
-  export let hardwayCounter = null; // Number of rolls since last hit
-  export let id = "";
-  export let betType = ""; // Override for chip identifier ('P', 'B')
-  export let hideChips = false;
+    const CHIP_COLORS = {
+        1: 'bg-white text-zinc-900 border-zinc-300',
+        5: 'bg-red-600 text-white border-red-400',
+        25: 'bg-blue-600 text-white border-blue-400',
+        100: 'bg-zinc-900 text-white border-zinc-600',
+        500: 'bg-purple-600 text-white border-purple-400'
+    };
 
-  $: betTypeDisplay = betType || 
-                      (id.startsWith('place_') || id.startsWith('num_') ? 'P' : 
-                       id.startsWith('buy_') ? 'B' : '');
+    // Calculate chip stack
+    function getChips(val) {
+        const chips = [];
+        let remaining = val;
+        const values = [500, 100, 25, 5, 1];
+        for (const v of values) {
+            const count = Math.floor(remaining / v);
+            for (let i = 0; i < count; i++) {
+                chips.push(v);
+                remaining -= v;
+                if (chips.length >= 6) break;
+            }
+            if (chips.length >= 6) break;
+        }
+        return chips;
+    }
+
+    $: chips = amount > 0 ? getChips(amount) : [];
 </script>
 
 <button
-  {id}
-  data-bet-id={id}
-  on:click
-  on:contextmenu
-  class="relative flex items-center justify-center border border-white/20 transition-all active:scale-95 group overflow-hidden {className} 
-  {type === 'dice' ? (reverse ? 'flex-row-reverse gap-2 px-2' : 'flex-row gap-2 px-2') : 'flex-col'}
-  {active ? 'bg-white/10' : 'hover:bg-white/5'}
-  {(status === 'off' || isAutoOff) && amount > 0 ? 'grayscale-[0.5]' : ''}"
+    on:click={onClick}
+    on:contextmenu|preventDefault={onRightClick}
+    class="relative flex flex-col items-center justify-center border transition-all active:scale-95 overflow-hidden {className} {colorClasses[color]} {glow ? 'animate-pulse' : ''}"
 >
-  <slot>
-    {#if (status === 'off' || isAutoOff) && amount > 0}
-      <div class="absolute inset-0 bg-red-900/10 backdrop-blur-[0.5px] z-[5] pointer-events-none flex items-start justify-end p-0.5">
-        <div class="bg-red-600 text-[6px] font-black text-white px-1 rounded-sm border border-white/20 shadow-sm uppercase tracking-tighter">OFF</div>
-      </div>
-    {/if}
+    <div class="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent pointer-events-none"></div>
+    
+    <slot name="top" />
 
-    {#if type === 'dice'}
-      <div class="flex gap-1 p-0.5 shrink-0">
-        {#each dice as d}
-          <div class="{diceSize} bg-white shadow-[0_2px_4px_rgba(0,0,0,0.3)] rounded-[2px] relative">
-            {#each diceDots[d] as dot}
-              <div class="absolute w-[22%] h-[22%] bg-zinc-900 rounded-full" 
-                   style="left: {(dot % 3) * 25 + 14}%; top: {Math.floor(dot / 3) * 25 + 14}%"></div>
-            {/each}
-          </div>
-        {/each}
-      </div>
+    {#if subLabel}
+        <span class="text-[10px] font-bold uppercase tracking-widest opacity-40 leading-none mb-1 pointer-events-none">{subLabel}</span>
     {/if}
+    
+    {#if label}
+        <span class="text-xl font-black leading-none pointer-events-none tracking-tight">{label}</span>
+    {/if}
+    
+    <slot />
 
-    <div class="flex flex-col items-center justify-center">
-      {#if hardwayCounter !== null}
-        <div class="flex flex-col items-center gap-1">
-          <div class="bg-black/40 px-2 py-0.5 rounded-full border border-white/10 shadow-inner flex flex-col items-center min-w-[44px]">
-            <span class="text-[12px] font-black text-white/40 leading-none">#{hardwayCounter}</span>
-          </div>
-          {#if payout}
-            <span class="text-base font-black text-white drop-shadow-md leading-none">{payout.replace(':', ' TO ')}</span>
-          {/if}
+    {#if odds}
+        <span class="text-[9px] font-black mt-1 opacity-30 pointer-events-none">{odds}</span>
+    {/if}
+    
+    <slot name="bottom" />
+    
+    {#if amount > 0}
+        <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+            <div class="relative w-12 h-12 flex items-center justify-center">
+                {#each chips as chipVal, i}
+                    <div
+                        class="absolute w-9 h-9 rounded-full border-2 border-dashed flex items-center justify-center shadow-[0_2px_4px_rgba(0,0,0,0.5)] text-[9px] font-black {CHIP_COLORS[chipVal]}"
+                        style="
+                            z-index: {i};
+                            transform: translateY(-{i * 3}px) rotate({i * 15}deg);
+                        "
+                    >
+                        {#if i === chips.length - 1}
+                            <div class="absolute -top-6 left-1/2 -translate-x-1/2 bg-zinc-900 px-1.5 py-0.5 rounded text-[8px] border border-white/20 whitespace-nowrap shadow-xl">
+                                ${amount}
+                            </div>
+                        {/if}
+                    </div>
+                {/each}
+            </div>
         </div>
-      {:else if payout}
-        <span class="text-base font-black text-white drop-shadow-md leading-none">{payout}</span>
-      {:else if label}
-        <span class="uppercase tracking-tighter leading-none 
-          {type === 'number' ? 'text-4xl font-black' : 
-           label === 'SEVEN' || label === 'ANY CRAPS' ? 'text-[28px] font-black text-[#ff3b30] drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)] italic' : 
-           label === 'COME' || label === 'FIELD' || label === 'PASS LINE' ? 'text-3xl font-black italic' : 
-           label === 'BUY' || label === 'PLACE' ? 'text-xl font-medium' :
-           label === 'C' || label === 'E' || label === 'C&E' ? 'text-2xl font-medium text-white drop-shadow-md' :
-           type === 'dice' ? 'text-[11px] font-black text-white/90' : 'text-[10px] font-black'} {labelClassName}">{label}</span>
-      {/if}
-      
-      {#if subLabel}
-        <span class="text-[12px] font-medium text-emerald-400/80 uppercase mt-0.5">{subLabel}</span>
-      {/if}
-
-      {#if odds && !payout}
-        <span class="text-[9px] font-black text-emerald-400 mt-1">{odds}</span>
-      {/if}
-    </div>
-  </slot>
-
-  {#if amount > 0 && !hideChips}
-    <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-      <div class="relative w-12 h-12 flex items-center justify-center">
-        <!-- Multiple chips stacked effect -->
-        {#each Array(Math.min(3, Math.ceil(amount / 25))) as _, i}
-          <div 
-            class="absolute"
-                    style="transform: translateY(-{i * 3}px) rotate({i * 10}deg);"
-                  >
-                    <Chip value={getChipValue(amount)} displayValue={amount} size="w-12 h-12" fontSize="text-[10px]" locked={isLocked && i === Math.min(3, Math.ceil(amount / 25)) - 1} betType={betTypeDisplay} />
-                  </div>
-        {/each}
-      </div>
-    </div>
-  {/if}
+    {/if}
 </button>
-
-<style>
-  button {
-    min-height: 40px;
-  }
-</style>

@@ -7,23 +7,22 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "predeploy": "npm run build",
-    "deploy": "gh-pages -d dist"
+    "deploy": "npm run build && npx gh-pages -d dist"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "autoprefixer": "^10.4.20",
     "gh-pages": "^6.3.0",
-    "svelte": "^5.43.8",
-    "vite": "^7.2.4"
+    "postcss": "^8.4.47",
+    "svelte": "^5.20.2",
+    "tailwindcss": "^3.4.14",
+    "vite": "^6.1.0"
   },
   "dependencies": {
-    "@tailwindcss/vite": "^4.1.18",
     "cannon-es": "^0.20.0",
-    "gsap": "^3.14.2",
-    "lucide-svelte": "^0.563.0",
-    "matter-js": "^0.20.0",
-    "phaser": "^3.90.0",
-    "tailwindcss": "^4.1.18",
-    "three": "^0.182.0"
+    "gsap": "^3.12.5",
+    "lucide-svelte": "^0.475.0",
+    "phaser": "^3.88.2",
+    "three": "^0.173.0"
   }
 }
