@@ -1017,8 +1017,10 @@
 
     // Finalize roll stats and tally
     lastRollWinnings = winnings;
-    const totalBetAtEnd = Object.keys(bets).reduce((sum, id) => sum + (bets[id] || 0), 0);
-    const netRoll = lastRollWinnings - lastRollTotalBet + totalBetAtEnd;
+    
+    // Net result of THIS ROLL: 
+    // (Amount returned to player) - (Amount they had at risk at the start of the roll)
+    const netRoll = lastRollWinnings - lastRollTotalBet;
     
     // Update tally
     if (previousWasSevenOut && point === null) {
@@ -1358,7 +1360,7 @@
               <span class="text-xs font-black text-emerald-400 leading-tight">${lastRollWinnings.toFixed(2)}</span>
             </div>
             <div class="flex flex-col items-center px-3 py-1 min-w-[90px] bg-white/5">
-              <span class="text-[8px] font-black text-zinc-400 uppercase tracking-tighter mb-0">Roller Tally</span>
+              <span class="text-[8px] font-black text-zinc-400 uppercase tracking-tighter mb-0">Shooter P/L</span>
               <span class="text-xs font-black {rollerTally >= 0 ? 'text-emerald-400' : 'text-red-400'} leading-tight">
                 {rollerTally >= 0 ? '+' : ''}${Math.abs(rollerTally).toFixed(2)}
               </span>
