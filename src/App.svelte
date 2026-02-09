@@ -210,7 +210,9 @@
     if (countInterval) clearInterval(countInterval);
     if (winOverlayTimer) clearTimeout(winOverlayTimer);
 
-    const duration = 1500; // 1.5 seconds for count
+    // Use win sound duration if available, else 4.5s
+    const soundDuration = winSoundBuffer ? winSoundBuffer.duration * 1000 : 4500;
+    const duration = soundDuration * 0.8; // Count up over 80% of the sound duration
     const steps = 60;
     const increment = targetAmount / steps;
     let current = 0;
