@@ -1,16 +1,15 @@
 <script>
   import { createEventDispatcher } from 'svelte';
-  import { Trophy, X, User, DollarSign, TrendingUp, TrendingDown, RotateCcw } from 'lucide-svelte';
+  import { Trophy, X, User, DollarSign, TrendingUp, TrendingDown, RotateCcw, Globe, Home } from 'lucide-svelte';
 
   const dispatch = createEventDispatcher();
 
-  export let users = []; // Array of { username, nickname, highestBalance, largestWin, largestLoss, resetCount }
+  export let users = []; // Array of { username, nickname, highestBalance, largestWin, largestLoss, resetCount, isLocal, isYou }
 
   // Sort users by highestBalance by default
   $: sortedUsers = [...users]
     .filter(u => u.username !== 'Guest')
-    .sort((a, b) => (b.highestBalance || 0) - (a.highestBalance || 0))
-    .slice(0, 10);
+    .sort((a, b) => (b.highestBalance || 0) - (a.highestBalance || 0));
 </script>
 
 <div class="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-xl animate-in fade-in duration-300">
@@ -23,7 +22,13 @@
         </div>
         <div>
           <h2 class="text-3xl font-black text-white tracking-tighter uppercase italic leading-none">Global <span class="text-emerald-400">Leaderboard</span></h2>
-          <p class="text-zinc-400 text-sm font-medium mt-1 uppercase tracking-widest">Top Performers (No Guests)</p>
+          <div class="flex items-center gap-2 mt-1">
+            <span class="flex h-2 w-2 relative">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <p class="text-zinc-400 text-xs font-medium uppercase tracking-widest">Live Updates • Showing {sortedUsers.length} Players</p>
+          </div>
         </div>
       </div>
       <button 
@@ -35,7 +40,7 @@
     </div>
 
     <!-- Table -->
-    <div class="relative z-10 overflow-hidden rounded-2xl border border-white/5 bg-black/40 shadow-inner">
+    <div class="relative z-10 overflow-hidden rounded-2xl border border-white/5 bg-black/40 shadow-inner max-h-[60vh] overflow-y-auto custom-scrollbar">
       <table class="w-full text-left border-collapse">
         <thead>
           <tr class="bg-black/60 border-b border-white/10">
@@ -49,7 +54,7 @@
         </thead>
         <tbody class="divide-y divide-white/5">
           {#each sortedUsers as user, i}
-            <tr class="hover:bg-white/[0.02] transition-colors {i === 0 ? 'bg-yellow-500/5' : ''}">
+            <tr class="hover:bg-white/[0.02] transition-colors {user.isYou ? 'bg-emerald-500/10' : i === 0 ? 'bg-yellow-500/5' : ''}">
               <td class="px-6 py-4">
                 <div class="flex items-center justify-center w-8 h-8 rounded-lg font-black italic 
                   {i === 0 ? 'bg-yellow-500 text-black shadow-[0_0_15px_rgba(234,179,8,0.4)]' : 
@@ -61,12 +66,29 @@
               </td>
               <td class="px-6 py-4">
                 <div class="flex items-center gap-3">
-                  <div class="p-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                  <div class="p-1.5 rounded-lg {user.isYou ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'} border">
                     <User size={16} />
                   </div>
-                  <span class="font-black text-white uppercase tracking-tight italic">
-                    {user.nickname || user.username}
-                  </span>
+                  <div class="flex flex-col">
+                    <span class="font-black text-white uppercase tracking-tight italic flex items-center gap-2">
+                      {user.nickname || user.username}
+                      {#if user.isYou}
+                        <span class="text-[10px] bg-emerald-500 text-black px-1.5 py-0.5 rounded-md not-italic font-black">YOU</span>
+                      {/if}
+                    </span>
+                    <div class="flex items-center gap-2 mt-0.5">
+                      {#if user.isLocal}
+                        <span class="flex items-center gap-1 text-[9px] font-bold text-zinc-500 uppercase tracking-tighter">
+                          <Home size={10} /> Local
+                        </span>
+                      {/if}
+                      {#if !user.isLocal || user.lastUpdate}
+                        <span class="flex items-center gap-1 text-[9px] font-bold text-emerald-500/60 uppercase tracking-tighter">
+                          <Globe size={10} /> Online
+                        </span>
+                      {/if}
+                    </div>
+                  </div>
                 </div>
               </td>
               <td class="px-6 py-4 text-right">

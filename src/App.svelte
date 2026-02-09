@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { Settings, RotateCcw, Info, History, Volume2, VolumeX, Trophy, X, HelpCircle } from 'lucide-svelte';
   import Auth from './lib/components/Auth.svelte';
   import BetSpot from './lib/components/BetSpot.svelte';
@@ -11,6 +11,38 @@
   import DiceBubble from './lib/components/DiceBubble.svelte';
   import Leaderboard from './lib/components/Leaderboard.svelte';
   import Help from './lib/components/Help.svelte';
+  import { fetchGlobalUsers, updateGlobalUser, syncAllLocalUsers } from './lib/services/leaderboard';
+
+  $: sortedAllUsers = [...allUsers]
+    .filter(u => u.username !== 'Guest')
+    .sort((a, b) => (b.highestBalance || 0) - (a.highestBalance || 0));
+
+  $: localUsers = getDB().users.filter(u => u.username !== 'Guest');
+
+  // Merged view for the UI, ensuring local updates are reflected instantly
+  $: displayUsers = (() => {
+    const merged = [...allUsers];
+    localUsers.forEach(local => {
+      const idx = merged.findIndex(m => m.username === local.username);
+      if (idx !== -1) {
+        // If it's the current user, prioritize their current live balance
+        const isCurrentUser = user && local.username === user.username;
+        const currentBalance = isCurrentUser ? balance : local.balance;
+        
+        merged[idx] = {
+          ...merged[idx],
+          ...local,
+          balance: currentBalance,
+          highestBalance: Math.max(merged[idx].highestBalance || 0, local.highestBalance || 0, currentBalance),
+          isLocal: true,
+          isYou: isCurrentUser
+        };
+      } else {
+        merged.push({ ...local, isLocal: true, isYou: user && local.username === user.username });
+      }
+    });
+    return merged;
+  })();
 
   // --- Audio ---
   const audioContext = typeof window !== 'undefined' ? new (window.AudioContext || window.webkitAudioContext)() : null;
@@ -84,7 +116,9 @@
   function handleSignup(event) {
     const { username, password, nickname } = event.detail;
     const db = getDB();
-    if (db.users.find(u => u.username === username)) {
+    
+    // Check local and global users
+    if (db.users.find(u => u.username === username) || allUsers.find(u => u.username === username)) {
       alert('Username already exists');
       return;
     }
@@ -101,14 +135,37 @@
     db.users.push(newUser);
     saveDB(db);
     login(newUser);
+    
+    // Update global leaderboard
+    updateGlobalUser(newUser).then(updatedUsers => {
+      if (updatedUsers) allUsers = updatedUsers;
+    });
   }
 
   function handleLogin(event) {
     const { username, password } = event.detail;
     const db = getDB();
-    const foundUser = db.users.find(u => u.username === username && u.password === password);
+    
+    // 1. Check local DB first
+    let foundUser = db.users.find(u => u.username === username && u.password === password);
+    
+    // 2. If not found locally, check global allUsers (synced from npoint)
+    if (!foundUser) {
+      const globalUser = allUsers.find(u => u.username === username && u.password === password);
+      if (globalUser) {
+        // Import global user to local DB
+        foundUser = {
+          ...globalUser,
+          balance: globalUser.balance || 300 // Fallback if balance not in global
+        };
+        db.users.push(foundUser);
+        saveDB(db);
+      }
+    }
+
     if (foundUser) {
       // Ensure existing users have stats fields
+      if (foundUser.balance === undefined) foundUser.balance = 300;
       if (foundUser.highestBalance === undefined) foundUser.highestBalance = foundUser.balance;
       if (foundUser.largestWin === undefined) foundUser.largestWin = 0;
       if (foundUser.largestLoss === undefined) foundUser.largestLoss = 0;
@@ -136,11 +193,22 @@
     user = userData;
     balance = userData.balance;
     showAuth = false;
+    
+    // Reset hardway counters for new sessions/players
+    hardwayCounters = { 4: 0, 6: 0, 8: 0, 10: 0 };
+    
     // Set cookie-like persistence in localStorage for session
     localStorage.setItem('bubble_craps_session', JSON.stringify({
       username: userData.username,
       mode: userData.mode || 'user'
     }));
+
+    // Update global leaderboard on login
+    if (userData.mode !== 'guest') {
+      updateGlobalUser(userData).then(updatedUsers => {
+        if (updatedUsers) allUsers = updatedUsers;
+      });
+    }
   }
 
   function logout() {
@@ -176,6 +244,11 @@
       saveDB(db);
       // Update local user object too
       user = { ...db.users[userIdx], mode: 'user' };
+      
+      // Update global leaderboard service
+      updateGlobalUser(user).then(updatedUsers => {
+        if (updatedUsers) allUsers = updatedUsers;
+      });
     }
   }
 
@@ -199,20 +272,72 @@
     showSettings = false;
   }
 
-  onMount(() => {
+  let leaderboardTimeout;
+
+  async function pollLeaderboard() {
+    try {
+      const users = await fetchGlobalUsers();
+      if (users) {
+        allUsers = users;
+      }
+    } catch (e) {
+      // Errors are silent
+    } finally {
+      leaderboardTimeout = setTimeout(pollLeaderboard, 15000); // 15s interval for stability
+    }
+  }
+
+  onMount(async () => {
     loadSounds();
     
-    // Check for existing session
-    const session = JSON.parse(localStorage.getItem('bubble_craps_session'));
-    if (session) {
-      if (session.mode === 'guest') {
-        handleGuest();
+    // Start polling after a small delay to let local DB load
+    setTimeout(async () => {
+      // 1. Initial sync
+      const db = getDB();
+      if (db.users.length > 0) {
+        const synced = await syncAllLocalUsers(db.users);
+        if (synced) allUsers = synced;
       } else {
-        const db = getDB();
-        const foundUser = db.users.find(u => u.username === session.username);
-        if (foundUser) login(foundUser);
+        // Even if no local users, fetch global ones to enable login from other devices
+        const synced = await fetchGlobalUsers();
+        if (synced) allUsers = synced;
       }
-    }
+      
+      // 2. Start regular polling
+      pollLeaderboard();
+
+      // 3. Check for existing session AFTER we have global users
+      const session = JSON.parse(localStorage.getItem('bubble_craps_session'));
+      if (session) {
+        if (session.mode === 'guest') {
+          // Force login prompt for guests on refresh by clearing session
+          localStorage.removeItem('bubble_craps_session');
+          showAuth = true;
+        } else {
+          // Check local DB first
+          let foundUser = db.users.find(u => u.username === session.username);
+          
+          // If not found locally, check global allUsers
+          if (!foundUser && allUsers.length > 0) {
+            const globalUser = allUsers.find(u => u.username === session.username);
+            if (globalUser) {
+              foundUser = {
+                ...globalUser,
+                balance: globalUser.balance || 300
+              };
+              db.users.push(foundUser);
+              saveDB(db);
+            }
+          }
+          
+          if (foundUser) login(foundUser);
+        }
+      }
+    }, 1000);
+  });
+
+  onDestroy(() => {
+    if (leaderboardTimeout) clearTimeout(leaderboardTimeout);
   });
 
   $: if (user && user.mode !== 'guest') {
@@ -336,6 +461,7 @@
 
   // --- State ---
   let user = null; // { username, nickname, mode: 'user' | 'guest', highestBalance, largestWin, largestLoss, resetCount }
+  let allUsers = []; // Shared global users for leaderboard
   let showAuth = true;
   let showSettings = false;
   let showLeaderboard = false;
@@ -388,7 +514,7 @@
     { dice: [2, 3], total: 5, establishesPoint: false },
     { dice: [5, 6], total: 11, establishesPoint: false }
   ];
-  let hardwayCounters = { 4: 12, 6: 4, 8: 0, 10: 24 }; // Mock initial values
+  let hardwayCounters = { 4: 0, 6: 0, 8: 0, 10: 0 }; // Initialize to 0
   let luckyRollerHits = new Set();
   let canPlaceLuckyRoller = true;
 
@@ -1537,9 +1663,9 @@
 
   {#if showLeaderboard}
     <Leaderboard 
-      users={getDB().users} 
-      on:close={() => showLeaderboard = false} 
-    />
+        users={displayUsers} 
+        on:close={() => showLeaderboard = false} 
+      />
   {/if}
 
   {#if showHelp}
