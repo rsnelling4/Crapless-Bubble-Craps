@@ -16,11 +16,28 @@
   async function loadChipSound() {
     if (!audioContext) return;
     try {
-      const response = await fetch('/poker_chip.mp3');
+      // Use relative path with BASE_URL for GitHub Pages compatibility
+      const baseUrl = import.meta.env.BASE_URL || '/';
+      const soundUrl = `${baseUrl}poker_chip.mp3`.replace(/\/+/g, '/');
+      
+      const response = await fetch(soundUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
       const arrayBuffer = await response.arrayBuffer();
-      chipSoundBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      
+      // Modern promise-based decodeAudioData
+      try {
+        chipSoundBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      } catch (decodeError) {
+        // Fallback for older browsers
+        chipSoundBuffer = await new Promise((resolve, reject) => {
+          audioContext.decodeAudioData(arrayBuffer, resolve, reject);
+        });
+      }
     } catch (e) {
-      console.error('Failed to load chip sound:', e);
+      console.error('Failed to load chip sound:', e.message || e);
     }
   }
 
@@ -168,9 +185,22 @@
   let milestoneFlash = false;
   let countInterval = null;
 
+  let lastWinAmount = 0;
+  let lastLossAmount = 0;
+  let lastRollResult = "";
+  // Roller tally state
+  let lastRollTotalBet = 0;
+  let lastRollWinnings = 0;
+  let rollerTally = 0;
+  let previousWasSevenOut = false;
+
+  $: console.log('Stats Update:', { lastRollTotalBet, lastRollWinnings, rollerTally });
+
   function triggerWinOverlay(targetAmount) {
     if (targetAmount <= 0) return;
     
+    lastWinAmount = targetAmount;
+    lastLossAmount = 0;
     // Reset and start count-up
     winAmountDisplay = 0;
     showWinOverlay = true;
@@ -211,6 +241,8 @@
   function triggerLossOverlay(targetAmount) {
     if (targetAmount <= 0) return;
     
+    lastLossAmount = targetAmount;
+    lastWinAmount = 0;
     // Reset and start count-up
     lossAmountDisplay = 0;
     showLossOverlay = true;
@@ -294,7 +326,7 @@
     return isActive ? sum + amount : sum;
   }, 0);
 
-  $: betsAreValid = activeBetsTotal >= 0;
+  $: betsAreValid = point !== null ? activeBetsTotal >= 3 : (bets.passline >= 3);
 
   function handlePress() {
     if (!isPressAvailable || point === null) {
@@ -382,10 +414,15 @@
     }
 
     if (id === 'passline' && point !== null) {
-      message = "POINT ESTABLISHED";
+      message = "PASS LINE IS A CONTRACT BET";
       return;
     }
 
+    if (id === 'come' && point === null) {
+      message = "PLACE COME BET AFTER POINT";
+      return;
+    }
+    
     // Lucky Roller placement rules
     if (['low_rolls', 'high_rolls', 'roll_em_all'].includes(id)) {
       if (!canPlaceLuckyRoller) {
@@ -521,6 +558,12 @@
 
   function rollDice() {
     if (rolling || showCommissionPrompt) return;
+    
+    if (point === null && (bets.passline || 0) < 3) {
+      message = "MINIMUM $3 PASS LINE REQUIRED";
+      return;
+    }
+
     if (!betsAreValid) {
       message = "MINIMUM TOTAL ACTIVE BET: $3";
       return;
@@ -604,6 +647,9 @@
     const currentBets = { ...bets };
     const winningBets = [];
     const losingBets = [];
+
+    // Capture total bet at start of roll
+    lastRollTotalBet = Object.keys(bets).reduce((sum, id) => sum + (bets[id] || 0), 0);
     
     // Helper to check if a bet is active for the current roll
     const isBetActive = (id) => {
@@ -628,6 +674,8 @@
     }
     hardwayCounters = hardwayCounters;
 
+    lastRollResult = "";
+
     // Lucky Roller Hit Tracking
     if (total !== 7) {
       luckyRollerHits.add(total);
@@ -639,11 +687,14 @@
     if (currentBets.field) {
       if ([2, 3, 4, 9, 10, 11, 12].includes(total)) {
         let multiplier = (total === 2 || total === 12) ? 2 : 1;
-        winnings += currentBets.field * (multiplier + 1);
+        const win = currentBets.field * multiplier;
+        winnings += currentBets.field + win;
         winningBets.push('field');
+        lastRollResult += `Field $${win.toFixed(2)} WIN. `;
         delete bets.field;
       } else {
         losingBets.push('field');
+        lastRollResult += `Field $${currentBets.field.toFixed(2)} LOSS. `;
         delete bets.field;
       }
     }
@@ -651,10 +702,13 @@
     // Any Seven (ALWAYS WORKING)
     if (currentBets.any_7) {
       if (total === 7) {
-        winnings += currentBets.any_7 * 5;
+        const win = currentBets.any_7 * 4;
+        winnings += currentBets.any_7 + win;
         winningBets.push('any_7');
+        lastRollResult += `Any 7 $${win.toFixed(2)} WIN. `;
       } else {
         losingBets.push('any_7');
+        lastRollResult += `Any 7 $${currentBets.any_7.toFixed(2)} LOSS. `;
       }
       delete bets.any_7;
     }
@@ -663,12 +717,15 @@
     if (currentBets.any_craps || currentBets.bet_c) {
       const amount = (currentBets.any_craps || 0) + (currentBets.bet_c || 0);
       if ([2, 3, 12].includes(total)) {
-        winnings += amount * 8;
+        const win = amount * 7;
+        winnings += amount + win;
         if (currentBets.any_craps) winningBets.push('any_craps');
         if (currentBets.bet_c) winningBets.push('bet_c');
+        lastRollResult += `Craps $${win.toFixed(2)} WIN. `;
       } else {
         if (currentBets.any_craps) losingBets.push('any_craps');
         if (currentBets.bet_c) losingBets.push('bet_c');
+        lastRollResult += `Craps $${amount.toFixed(2)} LOSS. `;
       }
       delete bets.any_craps;
       delete bets.bet_c;
@@ -678,12 +735,15 @@
     if (currentBets.bet_e || currentBets.horn_11) {
       const amount = (currentBets.bet_e || 0) + (currentBets.horn_11 || 0);
       if (total === 11) {
-        winnings += amount * 16;
+        const win = amount * 15;
+        winnings += amount + win;
         if (currentBets.bet_e) winningBets.push('bet_e');
         if (currentBets.horn_11) winningBets.push('horn_11');
+        lastRollResult += `Yo-11 $${win.toFixed(2)} WIN. `;
       } else {
         if (currentBets.bet_e) losingBets.push('bet_e');
         if (currentBets.horn_11) losingBets.push('horn_11');
+        lastRollResult += `Yo-11 $${amount.toFixed(2)} LOSS. `;
       }
       delete bets.bet_e;
       delete bets.horn_11;
@@ -693,23 +753,58 @@
     if (currentBets.horn_bet) {
       const quarter = currentBets.horn_bet / 4;
       if (total === 2 || total === 12 || total === 3 || total === 11) {
-        if (total === 2 || total === 12) winnings += quarter * 31 - (3 * quarter);
-        else if (total === 3 || total === 11) winnings += quarter * 16 - (3 * quarter);
+        let win = 0;
+        if (total === 2 || total === 12) win = quarter * 30 - (3 * quarter);
+        else if (total === 3 || total === 11) win = quarter * 15 - (3 * quarter);
+        winnings += quarter + win;
         winningBets.push('horn_bet');
+        lastRollResult += `Horn $${win.toFixed(2)} WIN. `;
       } else {
         losingBets.push('horn_bet');
+        lastRollResult += `Horn $${currentBets.horn_bet.toFixed(2)} LOSS. `;
       }
       delete bets.horn_bet;
+    }
+
+    // World Bet (ALWAYS WORKING)
+    if (currentBets.world) {
+      const unit = currentBets.world / 5;
+      if ([2, 3, 11, 12, 7].includes(total)) {
+        let win = 0;
+        if (total === 2 || total === 12) {
+          win = unit * 30 - (4 * unit);
+          winnings += unit + win;
+          lastRollResult += `World $${win.toFixed(2)} WIN. `;
+        } else if (total === 3 || total === 11) {
+          win = unit * 15 - (4 * unit);
+          winnings += unit + win;
+          lastRollResult += `World $${win.toFixed(2)} WIN. `;
+        } else if (total === 7) {
+          // Push condition: Any 7 unit wins 4:1, others lose.
+          // Total returned is the original bet.
+          winnings += currentBets.world;
+          lastRollResult += `World $${currentBets.world.toFixed(2)} PUSH. `;
+        }
+        winningBets.push('world');
+      } else {
+        losingBets.push('world');
+        lastRollResult += `World $${currentBets.world.toFixed(2)} LOSS. `;
+      }
+      delete bets.world;
     }
 
     // C&E (ALWAYS WORKING)
     if (currentBets.bet_ce) {
       if ([2, 3, 12, 11].includes(total)) {
-        if ([2, 3, 12].includes(total)) winnings += currentBets.bet_ce * 4;
-        else if (total === 11) winnings += currentBets.bet_ce * 8;
+        let win = 0;
+        if ([2, 3, 12].includes(total)) win = currentBets.bet_ce * 3;
+        else if (total === 11) win = currentBets.bet_ce * 7;
+        winnings += currentBets.bet_ce + win;
         winningBets.push('bet_ce');
+        lastRollResult += `C&E $${win.toFixed(2)} WIN. `;
       } else {
         losingBets.push('bet_ce');
+        lastRollResult += `C&E $${currentBets.bet_ce.toFixed(2)} LOSS. `;
       }
       delete bets.bet_ce;
     }
@@ -719,10 +814,13 @@
       if (currentBets[id]) {
         const n = parseInt(id.split('_')[1]);
         if (total === n) {
-          winnings += currentBets[id] * ((n === 2 || n === 12) ? 31 : 16);
+          const win = currentBets[id] * ((n === 2 || n === 12) ? 30 : 15);
+          winnings += currentBets[id] + win;
           winningBets.push(id);
+          lastRollResult += `Horn ${n} $${win.toFixed(2)} WIN. `;
         } else {
           losingBets.push(id);
+          lastRollResult += `Horn ${n} $${currentBets[id].toFixed(2)} LOSS. `;
         }
         delete bets[id];
       }
@@ -734,11 +832,15 @@
         const parts = id.split('_');
         const d1 = parseInt(parts[1]);
         const d2 = parseInt(parts[2]);
+        const betAmount = currentBets[id];
         if ((currentRoll[0] === d1 && currentRoll[1] === d2) || (currentRoll[0] === d2 && currentRoll[1] === d1)) {
-          winnings += currentBets[id] * ((d1 === d2) ? 31 : 16);
+          const win = betAmount * ((d1 === d2) ? 30 : 15);
+          winnings += betAmount + win;
           winningBets.push(id);
+          lastRollResult += `Hop ${d1}/${d2} $${win.toFixed(2)} WIN. `;
         } else {
           losingBets.push(id);
+          lastRollResult += `Hop ${d1}/${d2} $${betAmount.toFixed(2)} LOSS. `;
         }
         delete bets[id];
       }
@@ -749,11 +851,14 @@
       const betId = `hard_${n}`;
       if (currentBets[betId] && isBetActive(betId)) {
         if (total === n && currentRoll[0] === currentRoll[1]) {
-          winnings += currentBets[betId] * (hardwayOdds[n] + 1);
+          const win = currentBets[betId] * hardwayOdds[n];
+          winnings += currentBets[betId] + win;
           winningBets.push(betId);
+          lastRollResult += `Hard ${n} $${win.toFixed(2)} WIN. `;
           delete bets[betId];
         } else if (total === 7 || (total === n && currentRoll[0] !== currentRoll[1])) {
           losingBets.push(betId);
+          lastRollResult += `Hard ${n} $${currentBets[betId].toFixed(2)} LOSS. `;
           delete bets[betId];
         }
       }
@@ -763,24 +868,29 @@
     if (point === null) {
       if (total === 7) {
         if (currentBets.passline) {
-          winnings += (currentBets.passline * 2);
+          const win = currentBets.passline;
+          winnings += (currentBets.passline + win);
           winningBets.push('passline');
+          lastRollResult += `Pass Line $${win.toFixed(2)} WIN. `;
         }
-        delete bets.passline; 
+        
+        // Remove ALL other bets on the table on a Seven Out (Roll #1 win for Pass Line)
+        Object.keys(bets).forEach(id => {
+          if (id !== 'passline') {
+            losingBets.push(id);
+            if (currentBets[id]) {
+              lastRollResult += `${id.replace('_',' ')} $${currentBets[id].toFixed(2)} LOSS. `;
+            }
+          }
+          delete bets[id];
+        });
+
         betsOff = true; 
-      } else if ([2, 3, 11, 12].includes(total)) {
-        // In Crapless, 2, 3, 11, 12 on come-out are POINTS, not winners/losers
-        point = total;
-        message = `POINT IS ${point}`;
-        betsOff = false; 
-        if (bets.take_odds) {
-          balance += bets.take_odds;
-          delete bets.take_odds;
-        }
-        if (bets.passline > 0) showOddsPrompt = true;
       } else {
+        // Roll #1 win condition is a 7, no losing condition, point established on a 2, 3, 4, 5, 6, 8, 9, 10, 11, or 12.
         point = total;
         message = `POINT IS ${point}`;
+        lastRollResult += `Point set to ${point}. `;
         betsOff = false; 
         if (bets.take_odds) {
           balance += bets.take_odds;
@@ -789,27 +899,81 @@
         if (bets.passline > 0) showOddsPrompt = true;
       }
     } else {
+      // Come Bet Processing (when point exists)
+      if (currentBets.come) {
+        if (total === 7) {
+          const win = currentBets.come;
+          winnings += (currentBets.come + win);
+          winningBets.push('come');
+          lastRollResult += `Come $${win.toFixed(2)} WIN. `;
+          delete bets.come;
+        } else {
+          // Move Come bet to the number
+          const targetId = `come_${total}`;
+          bets[targetId] = (bets[targetId] || 0) + currentBets.come;
+          delete bets.come;
+          lastRollResult += `Come moved to ${total}. `;
+        }
+      }
+
+      // Established Come Bets Processing
+      numbers.forEach(n => {
+        const comeId = `come_${n}`;
+        if (currentBets[comeId]) {
+          if (total === n) {
+            const win = currentBets[comeId];
+            winnings += (currentBets[comeId] + win);
+            winningBets.push(comeId);
+            lastRollResult += `Come ${n} $${win.toFixed(2)} WIN. `;
+            delete bets[comeId];
+          } else if (total === 7) {
+            losingBets.push(comeId);
+            lastRollResult += `Come ${n} $${currentBets[comeId].toFixed(2)} LOSS. `;
+            delete bets[comeId];
+          }
+        }
+      });
+
       if (total === point) {
         if (currentBets.passline) {
-          winnings += (currentBets.passline * 2);
+          const win = currentBets.passline;
+          winnings += (currentBets.passline + win);
           winningBets.push('passline');
+          lastRollResult += `Pass Line $${win.toFixed(2)} WIN. `;
         }
         if (currentBets.take_odds && isBetActive('take_odds')) {
-          winnings += (currentBets.take_odds * (trueOdds[point] + 1));
+          const win = currentBets.take_odds * trueOdds[point];
+          winnings += (currentBets.take_odds + win);
           winningBets.push('take_odds');
+          lastRollResult += `Odds $${win.toFixed(2)} WIN. `;
         }
         delete bets.passline;
         delete bets.take_odds;
         point = null;
         message = "WINNER! PASS LINE PAYS";
       } else if (total === 7) {
-        if (currentBets.passline) losingBets.push('passline');
-        if (currentBets.take_odds) losingBets.push('take_odds');
-        delete bets.passline;
-        delete bets.take_odds;
+        if (currentBets.passline) {
+          losingBets.push('passline');
+          lastRollResult += `Pass Line $${currentBets.passline.toFixed(2)} LOSS. `;
+        }
+        if (currentBets.take_odds) {
+          losingBets.push('take_odds');
+          lastRollResult += `Odds $${currentBets.take_odds.toFixed(2)} LOSS. `;
+        }
+        
+        // Remove ALL other bets on the table on a Seven Out
+        Object.keys(bets).forEach(id => {
+          if (id !== 'passline' && id !== 'take_odds') {
+            losingBets.push(id);
+            if (currentBets[id]) lastRollResult += `${id.replace('_',' ')} $${currentBets[id].toFixed(2)} LOSS. `;
+          }
+          delete bets[id];
+        });
+        
         point = null;
         message = "SEVEN OUT";
         betsOff = true; 
+        previousWasSevenOut = true;
       }
     }
 
@@ -821,9 +985,9 @@
           const win = Math.floor(currentBets[placeId] * placeOdds[n]);
           winnings += win; // Only add profit, bet stays
           winningBets.push(placeId);
+          lastRollResult += `Place ${n} $${win.toFixed(2)} WIN. `;
         } else if (total === 7) {
-          losingBets.push(placeId);
-          delete bets[placeId];
+          // Already handled in point === null / point !== null blocks for total === 7
         }
       }
 
@@ -832,23 +996,19 @@
         if (total === n) {
           const winAmount = Math.floor(currentBets[buyId] * trueOdds[n]);
           const commission = Math.ceil(winAmount * 0.05);
-          winnings += (winAmount - commission); // Only add profit, bet stays
+          const win = winAmount - commission;
+          winnings += win; // Only add profit, bet stays
           winningBets.push(buyId);
+          lastRollResult += `Buy ${n} $${win.toFixed(2)} WIN (Comm $${commission}). `;
         } else if (total === 7) {
-          losingBets.push(buyId);
-          delete bets[buyId];
+          // Already handled in point === null / point !== null blocks for total === 7
         }
       }
     });
 
     // Lucky Roller Result Processing
     if (total === 7) {
-      if (bets.low_rolls) losingBets.push('low_rolls');
-      if (bets.high_rolls) losingBets.push('high_rolls');
-      if (bets.roll_em_all) losingBets.push('roll_em_all');
-      delete bets.low_rolls;
-      delete bets.high_rolls;
-      delete bets.roll_em_all;
+      // Already handled in point blocks
       luckyRollerHits = new Set();
       canPlaceLuckyRoller = true;
     } else {
@@ -857,54 +1017,109 @@
       const allSet = [...lowSet, ...highSet];
 
       if (bets.low_rolls && lowSet.every(n => luckyRollerHits.has(n))) {
-        winnings += bets.low_rolls * 31;
+        const win = bets.low_rolls * 30;
+        winnings += bets.low_rolls + win;
         winningBets.push('low_rolls');
         delete bets.low_rolls;
         message = "LUCKY ROLLER LOW WIN!";
+        lastRollResult += `Lucky Low $${win.toFixed(2)} WIN. `;
       }
       if (bets.high_rolls && highSet.every(n => luckyRollerHits.has(n))) {
-        winnings += bets.high_rolls * 31;
+        const win = bets.high_rolls * 30;
+        winnings += bets.high_rolls + win;
         winningBets.push('high_rolls');
         delete bets.high_rolls;
         message = "LUCKY ROLLER HIGH WIN!";
+        lastRollResult += `Lucky High $${win.toFixed(2)} WIN. `;
       }
       if (bets.roll_em_all && allSet.every(n => luckyRollerHits.has(n))) {
-        winnings += bets.roll_em_all * 156;
+        const win = bets.roll_em_all * 155;
+        winnings += bets.roll_em_all + win;
         winningBets.push('roll_em_all');
         delete bets.roll_em_all;
         message = "ROLL 'EM ALL WIN!";
+        lastRollResult += `Roll 'Em All $${win.toFixed(2)} WIN. `;
       }
     }
 
+    // Finalize roll stats and tally
+    lastRollWinnings = winnings;
+    const totalBetAtEnd = Object.keys(bets).reduce((sum, id) => sum + (bets[id] || 0), 0);
+    const netRoll = lastRollWinnings - lastRollTotalBet + totalBetAtEnd;
+    
+    // Update tally
+    if (previousWasSevenOut && point === null) {
+      rollerTally = netRoll;
+      previousWasSevenOut = false;
+    } else {
+      rollerTally += netRoll;
+    }
+
+    // Force reactivity for all stats variables
+    lastRollTotalBet = Number(lastRollTotalBet);
+    lastRollWinnings = Number(lastRollWinnings);
+    rollerTally = Number(rollerTally);
+
+    console.log('Finalized Stats:', { lastRollTotalBet, lastRollWinnings, rollerTally, netRoll });
+
     // Animation & Sounds
-    if (phaserTableRef) {
-      const getPos = (id) => {
-        const el = document.querySelector(`[data-bet-id="${id}"]`);
-        if (el) {
-          const rect = el.getBoundingClientRect();
-          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }
-        return null;
-      };
+    try {
+      if (phaserTableRef) {
+        const getPos = (id) => {
+          const el = document.querySelector(`[data-bet-id="${id}"]`);
+          if (el) {
+            const rect = el.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+          }
+          return null;
+        };
 
-      if (winningBets.length > 0) {
-         const winPositions = winningBets.map(getPos).filter(p => p !== null);
-         if (winPositions.length > 0) {
-           phaserTableRef.triggerWinAnimation(winPositions);
-           playChipSound('win');
-           triggerWinOverlay(winnings);
-         }
-       }
-
-      if (losingBets.length > 0) {
-        const lossPositions = losingBets.map(getPos).filter(p => p !== null);
-        if (lossPositions.length > 0) {
+        if (total === 7) {
+          // On a Seven Out, all bets are cleared from the table (even winners like Any 7)
+          // We trigger loss animations for everything that was on the table
+          const lossPositions = losingBets.map(getPos).filter(p => p !== null);
           const totalLoss = losingBets.reduce((sum, id) => sum + (currentBets[id] || 0), 0);
-          phaserTableRef.triggerLossAnimation(lossPositions);
-          playChipSound('loss');
-          triggerLossOverlay(totalLoss);
+          
+          if (lossPositions.length > 0) {
+            phaserTableRef.triggerLossAnimation(lossPositions);
+            playChipSound('loss');
+            if (totalLoss > 0) triggerLossOverlay(totalLoss);
+          }
+          
+          // Special case for Any 7 which technically wins on 7
+          if (winningBets.includes('any_7')) {
+            playChipSound('win');
+            triggerWinOverlay(currentBets.any_7 * 4); // Any 7 pays 4:1
+          }
+          
+          // Special case for Pass Line on come-out
+          if (winningBets.includes('passline')) {
+            playChipSound('win');
+            triggerWinOverlay(currentBets.passline); // Pass line pays 1:1
+          }
+        } else {
+          if (winningBets.length > 0) {
+            const winPositions = winningBets.map(getPos).filter(p => p !== null);
+            if (winPositions.length > 0) {
+              phaserTableRef.triggerWinAnimation(winPositions);
+              playChipSound('win');
+              triggerWinOverlay(winnings);
+            }
+          }
+
+          if (losingBets.length > 0) {
+            const lossPositions = losingBets.map(getPos).filter(p => p !== null);
+            if (lossPositions.length > 0) {
+              const totalLoss = losingBets.reduce((sum, id) => sum + (currentBets[id] || 0), 0);
+              phaserTableRef.triggerLossAnimation(lossPositions);
+              playChipSound('loss');
+              triggerLossOverlay(totalLoss);
+            }
+          }
         }
       }
+    } catch (e) {
+      console.error("Error in animation/sound processing:", e);
     }
 
     balance += winnings;
@@ -1057,9 +1272,9 @@
   <!-- Header / Top Info -->
   <div class="h-12 flex items-center justify-center px-4 bg-black/40 border-b border-white/10 shrink-0">
     <div class="text-center flex items-center gap-6">
-      <div class="flex flex-col items-center min-w-[140px]">
+      <div class="flex flex-col items-center min-w-[200px]">
         <span class="text-xs font-black uppercase tracking-widest {rolling ? 'text-red-500 animate-pulse' : (!betsAreValid ? 'text-red-500' : 'text-white/80')}">
-          {rolling ? 'NO MORE BETS' : (!betsAreValid ? 'BETS ARE NOT VALID YET!' : message)}
+          {rolling ? 'NO MORE BETS' : (!betsAreValid ? 'BETS ARE NOT VALID YET!' : (lastRollResult || message))}
         </span>
       </div>
     </div>
@@ -1155,35 +1370,41 @@
       />
 
       <!-- Info Block (Moved from Header) -->
-      <div class="w-[42%] bg-[#1a4d2e] rounded-2xl border-2 border-emerald-400/50 shadow-[0_0_40px_rgba(0,0,0,0.6),inset_0_0_30px_rgba(0,0,0,0.4)] flex items-center justify-around px-6 overflow-hidden relative group">
+      <div class="flex-1 min-w-[500px] bg-[#1a4d2e] rounded-2xl border-2 border-emerald-400/50 shadow-[0_0_40px_rgba(0,0,0,0.6),inset_0_0_30px_rgba(0,0,0,0.4)] flex items-center justify-between px-4 overflow-hidden relative group">
         <div class="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent"></div>
         
-        <div class="flex items-center gap-6 relative z-10">
-          <div class="flex items-center gap-2 px-3 py-1.5 bg-black/40 rounded-full border border-white/10 shadow-inner">
-            <div class="flex flex-col">
-              <span class="text-[8px] font-black text-zinc-500 uppercase leading-none">Last Bet</span>
-              <span class="text-xs font-black text-white">$98.00</span>
+        <div class="flex items-center gap-4 relative z-10 flex-1 min-w-0">
+          <!-- Compact Stats Box -->
+          <div class="flex items-center bg-black/40 rounded-xl border border-white/10 shadow-[inset_0_2px_8px_rgba(0,0,0,0.5)] divide-x divide-white/10 shrink-0">
+            <div class="flex flex-col items-center px-3 py-1">
+              <span class="text-[8px] font-black text-zinc-500 uppercase tracking-tighter mb-0">Last Bet</span>
+              <span class="text-xs font-black text-white leading-tight">${lastRollTotalBet.toFixed(2)}</span>
             </div>
-            <div class="w-px h-5 bg-white/10 mx-1"></div>
-            <div class="flex flex-col">
-              <span class="text-[8px] font-black text-zinc-500 uppercase leading-none">Last Win</span>
-              <span class="text-xs font-black text-white">$20.85</span>
+            <div class="flex flex-col items-center px-3 py-1">
+              <span class="text-[8px] font-black text-zinc-500 uppercase tracking-tighter mb-0">Last Win</span>
+              <span class="text-xs font-black text-emerald-400 leading-tight">${lastRollWinnings.toFixed(2)}</span>
+            </div>
+            <div class="flex flex-col items-center px-3 py-1 min-w-[90px] bg-white/5">
+              <span class="text-[8px] font-black text-zinc-400 uppercase tracking-tighter mb-0">Roller Tally</span>
+              <span class="text-xs font-black {rollerTally >= 0 ? 'text-emerald-400' : 'text-red-400'} leading-tight">
+                {rollerTally >= 0 ? '+' : ''}${Math.abs(rollerTally).toFixed(2)}
+              </span>
             </div>
           </div>
           
-          <div class="flex flex-col playable-balance">
-            <span class="text-[10px] font-black text-zinc-400 uppercase leading-none tracking-tighter">Playable Balance</span>
-            <span class="text-2xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">${balance.toFixed(2)}</span>
+          <div class="flex flex-col playable-balance shrink-0 ml-2">
+            <span class="text-[9px] font-black text-zinc-400 uppercase leading-none tracking-tighter">Balance</span>
+            <span class="text-xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">${balance.toFixed(2)}</span>
           </div>
         </div>
 
-        <div class="flex items-center gap-4 relative z-10">
+        <div class="flex items-center gap-3 relative z-10 shrink-0">
           <div class="flex flex-col items-end">
-            <span class="text-[10px] font-black text-zinc-400 uppercase leading-none tracking-tighter">Current Bet</span>
-            <span class="text-2xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">${totalBet.toFixed(2)}</span>
+            <span class="text-[9px] font-black text-zinc-400 uppercase leading-none tracking-tighter">Current Bet</span>
+            <span class="text-xl font-black text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">${totalBet.toFixed(2)}</span>
           </div>
-          <button class="p-2 rounded-full bg-black/40 border border-white/10 text-zinc-400 hover:text-white transition-colors shadow-inner">
-            <Settings size={20} />
+          <button class="p-1.5 rounded-full bg-black/40 border border-white/10 text-zinc-400 hover:text-white transition-colors shadow-inner">
+            <Settings size={18} />
           </button>
         </div>
       </div>
@@ -1351,22 +1572,36 @@
                     </div>
                   </div>
 
-                  <!-- ANY CRAPS -->
-                  <BetSpot 
-                    id="any_craps" 
-                    className="h-[20%] bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl flex flex-row items-center justify-between px-6 relative overflow-hidden" 
-                    on:click={() => handlePlaceBet('any_craps')} 
-                    on:contextmenu={(e) => handleRemoveBet('any_craps', e)} 
-                    amount={bets.any_craps}
-                  >
-                    <span class="text-base font-black text-white drop-shadow-md leading-none">7 TO 1</span>
-                    <span class="text-xs font-black text-white/40">•</span>
-                    <div class="flex-1 flex justify-center">
-                      <span class="uppercase tracking-tighter leading-none text-[28px] font-black text-[#ff3b30] drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)] italic">ANY CRAPS</span>
-                    </div>
-                    <span class="text-xs font-black text-white/40">•</span>
-                    <span class="text-base font-black text-white drop-shadow-md leading-none">7 TO 1</span>
-                  </BetSpot>
+                  <!-- ANY CRAPS & WORLD -->
+                  <div class="h-[20%] flex gap-2">
+                    <BetSpot 
+                      id="any_craps" 
+                      className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl flex flex-row items-center justify-between px-4 relative overflow-hidden" 
+                      on:click={() => handlePlaceBet('any_craps')} 
+                      on:contextmenu={(e) => handleRemoveBet('any_craps', e)} 
+                      amount={bets.any_craps}
+                    >
+                      <span class="text-sm font-black text-white drop-shadow-md leading-none">7:1</span>
+                      <div class="flex-1 flex justify-center">
+                        <span class="uppercase tracking-tighter leading-none text-xl font-black text-[#ff3b30] drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)] italic">ANY CRAPS</span>
+                      </div>
+                      <span class="text-sm font-black text-white drop-shadow-md leading-none">7:1</span>
+                    </BetSpot>
+
+                    <BetSpot 
+                      id="world" 
+                      className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl flex flex-row items-center justify-between px-4 relative overflow-hidden" 
+                      on:click={() => handlePlaceBet('world')} 
+                      on:contextmenu={(e) => handleRemoveBet('world', e)} 
+                      amount={bets.world}
+                    >
+                      <span class="text-xs font-black text-white/40">•</span>
+                      <div class="flex-1 flex justify-center">
+                        <span class="uppercase tracking-tighter leading-none text-xl font-black text-yellow-500 drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)] italic">WORLD</span>
+                      </div>
+                      <span class="text-xs font-black text-white/40">•</span>
+                    </BetSpot>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1486,8 +1721,15 @@
 
                 <BetSpot id={`buy_${n}`} label="BUY" className="h-[16%] bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none" on:click={() => handlePlaceBet(`buy_${n}`)} on:contextmenu={(e) => handleRemoveBet(`buy_${n}`, e)} amount={bets[`buy_${n}`]} status={betStatus[`buy_${n}`]} isAutoOff={point === null} />
                 <BetSpot id={`place_${n}`} label={n === 6 ? 'SIX' : n === 9 ? 'NINE' : n} type="number" className="flex-1 bg-[#0a2e0a]/80 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.5),inset_0_0_15px_rgba(0,0,0,0.4)]" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} status={betStatus[`place_${n}`]} isAutoOff={point === null} />
-                <div class="h-[18%] flex gap-1">
+                <div class="h-[18%] flex gap-1 relative">
                   <BetSpot id={`place_label_${n}`} label="PLACE" subLabel={formatOdds(n)} className="flex-1 bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-[9px]" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} hideChips={true} status={betStatus[`place_${n}`]} isAutoOff={point === null} />
+                  
+                  <!-- Come Bet established on this number -->
+                  {#if bets[`come_${n}`]}
+                    <div class="absolute -top-16 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+                      <Chip value={bets[`come_${n}`]} size="w-10 h-10" fontSize="text-[8px]" betType="COME" />
+                    </div>
+                  {/if}
                 </div>
               </div>
             {/each}
@@ -1683,7 +1925,7 @@
           </button>
           <button 
             on:click={handleManualRoll}
-            disabled={rolling}
+            disabled={rolling || !betsAreValid}
             class="px-8 py-2 bg-[#1a4d2e] text-white rounded-xl border-2 border-emerald-400/50 text-xs font-black uppercase shadow-[0_0_20px_rgba(52,211,153,0.3),inset_0_0_15px_rgba(0,0,0,0.4)] hover:shadow-[0_0_30px_rgba(52,211,153,0.5)] hover:bg-emerald-800 transition-all active:scale-95 disabled:opacity-50 disabled:scale-100"
           >
             {rolling ? 'Rolling' : 'Roll'}
