@@ -412,6 +412,9 @@
   let previousWasSevenOut = false;
   let showRecap = false;
   let roundRecapText = "";
+  
+  let lastWinningBets = []; // Stores bets that won on the last roll for "Pressing"
+  let pressableWinnings = 0; // Stores the total winnings from the last roll available to press
 
   $: console.log('Stats Update:', { lastRollTotalBet, lastRollWinnings, rollerTally });
 
@@ -512,24 +515,7 @@
   }
 
   // --- Reactive Logic ---
-  $: isPressAvailable = point !== null && (
-    (bets.passline || 0) > 0 || 
-    (bets.field || 0) > 0 || 
-    (bets.bet_c || 0) > 0 || 
-    (bets.bet_e || 0) > 0 || 
-    (bets.bet_ce || 0) > 0 || 
-    (bets.any_craps || 0) > 0 || 
-    (bets.any_7 || 0) > 0 || 
-    (bets.horn_bet || 0) > 0 ||
-    (bets.horn_2 || 0) > 0 ||
-    (bets.horn_3 || 0) > 0 ||
-    (bets.horn_11 || 0) > 0 ||
-    (bets.horn_12 || 0) > 0 ||
-    (bets.roll_em_all || 0) > 0 ||
-    (bets.low_rolls || 0) > 0 ||
-    (bets.high_rolls || 0) > 0 ||
-    Object.keys(bets).some(k => k.startsWith('hop_') && (bets[k] || 0) > 0)
-  );
+  $: isPressAvailable = pressableWinnings > 0 && lastWinningBets.length > 0;
 
   $: activeBetsTotal = Object.entries(bets).reduce((sum, [id, amount]) => {
     // Determine if bet is currently active
@@ -549,47 +535,45 @@
   $: betsAreValid = point !== null ? (activeBetsTotal > 0 || Object.values(bets).some(v => v > 0)) : (bets.passline > 0);
 
   function handlePress() {
-    if (!isPressAvailable || point === null) {
-      if (point === null) message = "PRESS ONLY AFTER COME-OUT";
-      else message = "PLACE ACTION BETS TO PRESS";
+    if (!isPressAvailable) {
+      if (lastRollWinnings === 0) message = "NO WINNINGS TO PRESS";
+      else message = "WINNINGS ALREADY PRESSED";
       return;
     }
-    
-    const placeBetId = `place_${point}`;
-    const buyBetId = `buy_${point}`;
-    
-    const currentPlaceBet = bets[placeBetId] || 0;
-    const currentBuyBet = bets[buyBetId] || 0;
-    
-    if (currentPlaceBet > 0) {
-      if (balance < currentPlaceBet) {
-        message = "INSUFFICIENT CREDIT TO PRESS";
-        return;
-      }
-      balance -= currentPlaceBet;
-      bets[placeBetId] = currentPlaceBet * 2;
+
+    // Pressing your bet means using the winnings from the last roll to boost those bets
+    // Only bets that won on the last roll and are still on the table are pressable
+    let pressedCount = 0;
+    let totalPressedAmount = 0;
+
+    lastWinningBets.forEach(id => {
+      // Winnings are already in balance, so we deduct them from balance to "press" the bet
+      // We only press if the bet is still on the table (for Place/Buy/Hardways)
+      // For one-roll bets that won, they've been deleted from `bets`, so we re-place them with the winnings
       
-      if (bets[placeBetId] >= 2000000) { // Disabled auto-buy for now as per user preference
-        bets[buyBetId] = (bets[buyBetId] || 0) + bets[placeBetId];
-        delete bets[placeBetId];
-        message = `PRESSED & AUTO-BOUGHT ${point}`;
-      } else {
-        message = `PRESSED ${point} TO $${bets[placeBetId]}`;
+      const winningAmount = lastWinningBetsData[id] || 0;
+      if (winningAmount > 0) {
+        // If it's a place/buy/hardway bet, it's still in `bets`
+        // If it was a one-roll bet (field, horn, etc), it was deleted from `bets` in processResults
+        // But for "Press", we re-apply the winnings to that spot
+        
+        bets[id] = (bets[id] || 0) + winningAmount;
+        totalPressedAmount += winningAmount;
+        pressedCount++;
       }
+    });
+
+    if (pressedCount > 0) {
+      balance -= totalPressedAmount;
+      pressableWinnings = 0; // Can only press once per winning roll
+      lastWinningBets = [];
       bets = bets;
-    } else if (currentBuyBet > 0) {
-      if (balance < currentBuyBet) {
-        message = "INSUFFICIENT CREDIT TO PRESS";
-        return;
-      }
-      balance -= currentBuyBet;
-      bets[buyBetId] = currentBuyBet * 2;
-      message = `PRESSED BUY ${point} TO $${bets[buyBetId]}`;
-      bets = bets;
-    } else {
-      message = `NO PLACE BET ON ${point} TO PRESS`;
+      message = `PRESSED ${pressedCount} BETS WITH $${totalPressedAmount.toFixed(2)}`;
+      playChipSound('place');
     }
   }
+
+  let lastWinningBetsData = {}; // Internal storage for the winning amounts
 
   function handleAcross() {
     if (point === null) {
@@ -902,6 +886,19 @@
     const isPointSet = point !== null;
     const wasSevenOut = previousWasSevenOut;
 
+    // Reset Pressing state at start of new roll processing
+    lastWinningBets = [];
+    lastWinningBetsData = {};
+    pressableWinnings = 0;
+
+    // Helper to record a win for "Press" functionality
+    const recordWin = (id, winAmount) => {
+      winningBets.push(id);
+      lastWinningBets.push(id);
+      lastWinningBetsData[id] = (lastWinningBetsData[id] || 0) + winAmount;
+      pressableWinnings += winAmount;
+    };
+
     // Capture total bet at start of roll
     lastRollTotalBet = Object.keys(bets).reduce((sum, id) => sum + (bets[id] || 0), 0);
     
@@ -944,7 +941,7 @@
         const win = currentBets.field * multiplier;
         winnings += currentBets.field + win;
         rollProfit += win;
-        winningBets.push('field');
+        recordWin('field', win);
         lastRollResult += `Field $${win.toFixed(2)} WIN. `;
         delete bets.field;
       } else {
@@ -960,7 +957,7 @@
         const win = currentBets.any_7 * 4;
         winnings += currentBets.any_7 + win;
         rollProfit += win;
-        winningBets.push('any_7');
+        recordWin('any_7', win);
         lastRollResult += `Any 7 $${win.toFixed(2)} WIN. `;
       } else {
         losingBets.push('any_7');
@@ -976,8 +973,8 @@
         const win = amount * 7;
         winnings += amount + win;
         rollProfit += win;
-        if (currentBets.any_craps) winningBets.push('any_craps');
-        if (currentBets.bet_c) winningBets.push('bet_c');
+        if (currentBets.any_craps) recordWin('any_craps', currentBets.any_craps * 7);
+        if (currentBets.bet_c) recordWin('bet_c', currentBets.bet_c * 7);
         lastRollResult += `Craps $${win.toFixed(2)} WIN. `;
       } else {
         if (currentBets.any_craps) losingBets.push('any_craps');
@@ -995,8 +992,8 @@
         const win = amount * 15;
         winnings += amount + win;
         rollProfit += win;
-        if (currentBets.bet_e) winningBets.push('bet_e');
-        if (currentBets.horn_11) winningBets.push('horn_11');
+        if (currentBets.bet_e) recordWin('bet_e', currentBets.bet_e * 15);
+        if (currentBets.horn_11) recordWin('horn_11', currentBets.horn_11 * 15);
         lastRollResult += `Yo-11 $${win.toFixed(2)} WIN. `;
       } else {
         if (currentBets.bet_e) losingBets.push('bet_e');
@@ -1016,7 +1013,7 @@
         else if (total === 3 || total === 11) win = quarter * 15 - (3 * quarter);
         winnings += quarter + win;
         rollProfit += win;
-        winningBets.push('horn_bet');
+        recordWin('horn_bet', win);
         lastRollResult += `Horn $${win.toFixed(2)} WIN. `;
       } else {
         losingBets.push('horn_bet');
@@ -1033,7 +1030,7 @@
         else if (total === 11) win = currentBets.bet_ce * 7;
         winnings += currentBets.bet_ce + win;
         rollProfit += win;
-        winningBets.push('bet_ce');
+        recordWin('bet_ce', win);
         lastRollResult += `C&E $${win.toFixed(2)} WIN. `;
       } else {
         losingBets.push('bet_ce');
@@ -1050,7 +1047,7 @@
           const win = currentBets[id] * ((n === 2 || n === 12) ? 30 : 15);
           winnings += currentBets[id] + win;
           rollProfit += win;
-          winningBets.push(id);
+          recordWin(id, win);
           lastRollResult += `Horn ${n} $${win.toFixed(2)} WIN. `;
         } else {
           losingBets.push(id);
@@ -1071,7 +1068,7 @@
           const win = betAmount * ((d1 === d2) ? 30 : 15);
           winnings += betAmount + win;
           rollProfit += win;
-          winningBets.push(id);
+          recordWin(id, win);
           lastRollResult += `Hop ${d1}/${d2} $${win.toFixed(2)} WIN. `;
         } else {
           losingBets.push(id);
@@ -1089,7 +1086,7 @@
           const win = currentBets[betId] * hardwayOdds[n];
           winnings += currentBets[betId] + win;
           rollProfit += win;
-          winningBets.push(betId);
+          recordWin(betId, win);
           lastRollResult += `Hard ${n} $${win.toFixed(2)} WIN. `;
           delete bets[betId];
         } else if (total === 7 || (total === n && currentRoll[0] !== currentRoll[1])) {
@@ -1107,7 +1104,7 @@
           const win = currentBets.passline;
           winnings += (currentBets.passline + win);
           rollProfit += win;
-          winningBets.push('passline');
+          recordWin('passline', win);
           lastRollResult += `Pass Line $${win.toFixed(2)} WIN. `;
         }
         
@@ -1178,14 +1175,14 @@
           const win = currentBets.passline;
           winnings += (currentBets.passline + win);
           rollProfit += win;
-          winningBets.push('passline');
+          recordWin('passline', win);
           lastRollResult += `Pass Line $${win.toFixed(2)} WIN. `;
         }
         if (currentBets.take_odds && isBetActive('take_odds')) {
           const win = currentBets.take_odds * trueOdds[point];
           winnings += (currentBets.take_odds + win);
           rollProfit += win;
-          winningBets.push('take_odds');
+          recordWin('take_odds', win);
           lastRollResult += `Odds $${win.toFixed(2)} WIN. `;
         }
         delete bets.passline;
@@ -1226,7 +1223,7 @@
           const win = Math.floor(currentBets[placeId] * placeOdds[n]);
           winnings += win; // Only add profit, bet stays
           rollProfit += win;
-          winningBets.push(placeId);
+          recordWin(placeId, win);
           lastRollResult += `Place ${n} $${win.toFixed(2)} WIN. `;
         } else if (total === 7) {
           // Already handled in point === null / point !== null blocks for total === 7
@@ -1239,7 +1236,7 @@
           const win = Math.floor(currentBets[buyId] * trueOdds[n]);
           winnings += win; // Only add profit, bet stays. Commission already paid at placement.
           rollProfit += win;
-          winningBets.push(buyId);
+          recordWin(buyId, win);
           lastRollResult += `Buy ${n} $${win.toFixed(2)} WIN. `;
         } else if (total === 7) {
           // Already handled in point === null / point !== null blocks for total === 7
@@ -1261,7 +1258,7 @@
         const win = bets.low_rolls * 30;
         winnings += bets.low_rolls + win;
         rollProfit += win;
-        winningBets.push('low_rolls');
+        recordWin('low_rolls', win);
         delete bets.low_rolls;
         message = "LUCKY ROLLER LOW WIN!";
         lastRollResult += `Lucky Low $${win.toFixed(2)} WIN. `;
@@ -1270,7 +1267,7 @@
         const win = bets.high_rolls * 30;
         winnings += bets.high_rolls + win;
         rollProfit += win;
-        winningBets.push('high_rolls');
+        recordWin('high_rolls', win);
         delete bets.high_rolls;
         message = "LUCKY ROLLER HIGH WIN!";
         lastRollResult += `Lucky High $${win.toFixed(2)} WIN. `;
@@ -1279,7 +1276,7 @@
         const win = bets.roll_em_all * 155;
         winnings += bets.roll_em_all + win;
         rollProfit += win;
-        winningBets.push('roll_em_all');
+        recordWin('roll_em_all', win);
         delete bets.roll_em_all;
         message = "ROLL 'EM ALL WIN!";
         lastRollResult += `Roll 'Em All $${win.toFixed(2)} WIN. `;
@@ -1643,7 +1640,7 @@
         <img src="https://img.icons8.com/color/48/dice.png" alt="logo" class="w-6 h-6 drop-shadow-md" />
         <img src="https://img.icons8.com/color/48/dice.png" alt="logo" class="w-6 h-6 drop-shadow-md" />
       </div>
-      <h1 class="text-xl font-black text-white tracking-tighter uppercase italic">Crapless Bubble <span class="text-emerald-400">Craps</span></h1>
+      <h1 class="text-xl font-black text-white tracking-tighter uppercase italic">Bobby's Bubble <span class="text-emerald-400">Craps</span></h1>
     </div>
 
     <!-- Welcome Message -->
@@ -1900,7 +1897,7 @@
                 <span class="text-[10px] font-black text-white uppercase tracking-widest">HARD WAYS <span class="opacity-70 font-bold">(# of rolls since last)</span></span>
               </div>
               
-              <div class="grid grid-cols-2 gap-x-2 gap-y-2 flex-[0_0_35%] min-h-[140px]">
+              <div class="grid grid-cols-2 gap-x-2 gap-y-2 flex-[0_0_30%] min-h-[120px]">
                 <!-- Left Half -->
                 <div class="flex flex-col gap-2 border-r-2 border-white/20 pr-1">
                   <BetSpot 
@@ -1973,20 +1970,18 @@
                   <!-- SEVEN -->
                   <BetSpot 
                     id="any_7" 
-                    className="flex-[0_0_18%] min-h-[50px] bg-[#0d2b18] border border-white/20 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] rounded-xl flex flex-row items-center justify-center px-4 relative overflow-hidden" 
+                    className="flex-[0_0_15%] min-h-[40px] bg-[#0d2b18] border border-white/20 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] rounded-xl flex flex-row items-center justify-center px-4 relative overflow-hidden" 
                     on:click={() => handlePlaceBet('any_7')} 
                     on:contextmenu={(e) => handleRemoveBet('any_7', e)} 
                     amount={bets.any_7}
                   >
-                    <span class="text-[11px] font-bold text-white/90 whitespace-nowrap tracking-tight">4 TO 1</span>
-                    <span class="text-xl text-white/90 mx-4 font-bold leading-none">·</span>
-                    <span class="text-2xl font-black text-[#d63a30] uppercase tracking-wide drop-shadow-[0_0_8px_rgba(214,58,48,0.4)]">SEVEN</span>
-                    <span class="text-xl text-white/90 mx-4 font-bold leading-none">·</span>
-                    <span class="text-[11px] font-bold text-white/90 whitespace-nowrap tracking-tight">4 TO 1</span>
+                    <span class="absolute left-3 text-[9px] font-bold text-white/60 whitespace-nowrap tracking-tighter uppercase">4 TO 1</span>
+                    <span class="text-xl font-black text-[#d63a30] uppercase tracking-wide drop-shadow-[0_0_8px_rgba(214,58,48,0.4)]">SEVEN</span>
+                    <span class="absolute right-3 text-[9px] font-bold text-white/60 whitespace-nowrap tracking-tighter uppercase">4 TO 1</span>
                   </BetSpot>
 
                   <!-- HORN BETS -->
-                  <div class="flex-1 grid grid-cols-2 grid-rows-2 gap-px relative border border-white/20 shadow-[inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl overflow-hidden">
+                  <div class="flex-[0_0_48%] min-h-[120px] grid grid-cols-2 grid-rows-2 gap-px relative border border-white/20 shadow-[inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl overflow-hidden">
                       <!-- Horn 2 -->
                       <BetSpot id="horn_2" type="dice" dice={[1,1]} payout="30 TO 1" className="bg-[#1a4d2e] border-emerald-400/20 hover:bg-emerald-700/40 transition-colors" on:click={() => handlePlaceBet('horn_2')} on:contextmenu={(e) => handleRemoveBet('horn_2', e)} amount={bets.horn_2} />
                       <!-- Horn 3 -->
@@ -2000,18 +1995,18 @@
                     <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
                       <BetSpot 
                         id="horn_bet" 
-                        className="bg-[#1a4d2e] border border-white/30 px-4 py-1 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] pointer-events-auto" 
+                        className="bg-[#1a4d2e] border border-white/30 px-3 py-0.5 rounded-lg shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] pointer-events-auto" 
                         on:click={() => handlePlaceBet('horn_bet')} 
                         on:contextmenu={(e) => handleRemoveBet('horn_bet', e)} 
                         amount={bets.horn_bet}
                       >
-                        <span class="text-[11px] font-black text-white uppercase tracking-wider">Horn Bet</span>
+                        <span class="text-[10px] font-black text-white uppercase tracking-wider">Horn Bet</span>
                       </BetSpot>
                     </div>
                   </div>
 
                   <!-- ANY CRAPS -->
-                  <div class="flex-[0_0_18%] min-h-[50px] flex">
+                  <div class="flex-[0_0_15%] min-h-[40px] flex">
                     <BetSpot 
                       id="any_craps" 
                       className="flex-1 bg-[#0d2b18] border border-white/20 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] rounded-xl flex flex-row items-center justify-center px-4 relative overflow-hidden" 
@@ -2019,11 +2014,9 @@
                       on:contextmenu={(e) => handleRemoveBet('any_craps', e)} 
                       amount={bets.any_craps}
                     >
-                      <span class="text-[11px] font-bold text-white/90 whitespace-nowrap tracking-tight">7 TO 1</span>
-                      <span class="text-xl text-white/90 mx-4 font-bold leading-none">·</span>
-                      <span class="text-2xl font-black text-[#d63a30] uppercase tracking-wide drop-shadow-[0_0_8px_rgba(214,58,48,0.4)]">ANY CRAPS</span>
-                      <span class="text-xl text-white/90 mx-4 font-bold leading-none">·</span>
-                      <span class="text-[11px] font-bold text-white/90 whitespace-nowrap tracking-tight">7 TO 1</span>
+                      <span class="absolute left-3 text-[9px] font-bold text-white/60 whitespace-nowrap tracking-tighter uppercase">7 TO 1</span>
+                        <span class="text-xl font-black text-[#d63a30] uppercase tracking-wide drop-shadow-[0_0_8px_rgba(214,58,48,0.4)]">ANY CRAPS</span>
+                        <span class="absolute right-3 text-[9px] font-bold text-white/60 whitespace-nowrap tracking-tighter uppercase">7 TO 1</span>
                     </BetSpot>
                   </div>
                 </div>
@@ -2143,11 +2136,11 @@
                   {/if}
                 </div>
 
-                <BetSpot id={`buy_${n}`} label="BUY" className="h-[16%] bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-xs" on:click={() => handlePlaceBet(`buy_${n}`)} on:contextmenu={(e) => handleRemoveBet(`buy_${n}`, e)} amount={bets[`buy_${n}`]} status={betStatus[`buy_${n}`]} />
-                <BetSpot id={`place_${n}`} label={n === 6 ? 'SIX' : n === 9 ? 'NINE' : n} type="number" className="flex-1 bg-[#0a2e0a]/80 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.5),inset_0_0_15px_rgba(0,0,0,0.4)]" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} status={betStatus[`place_${n}`]}>
+                <BetSpot id={`buy_${n}`} label="BUY" betType="BUY" className="h-[16%] bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-xs" on:click={() => handlePlaceBet(`buy_${n}`)} on:contextmenu={(e) => handleRemoveBet(`buy_${n}`, e)} amount={bets[`buy_${n}`]} status={betStatus[`buy_${n}`]} />
+                <BetSpot id={`place_${n}`} label={n === 6 ? 'SIX' : n === 9 ? 'NINE' : n} type="number" hideChips={true} className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.5),inset_0_0_15px_rgba(0,0,0,0.4)]" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} status={betStatus[`place_${n}`]}>
                 </BetSpot>
                 <div class="h-[18%] flex gap-1 relative">
-                  <BetSpot id={`place_label_${n}`} label="PLACE" className="flex-1 bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-xs" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} hideChips={true} status={betStatus[`place_${n}`]} />
+                  <BetSpot id={`place_label_${n}`} label="PLACE" betType="PLACE" className="flex-1 bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-xs" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} status={betStatus[`place_${n}`]} />
                   
                   <!-- Come Bet established on this number -->
                   {#if bets[`come_${n}`]}
@@ -2262,10 +2255,10 @@
 
             <!-- PASS LINE / TAKE ODDS -->
             <div class="h-[28%] flex gap-2">
-              <BetSpot id="take_odds" className="w-[25%] bg-[#1a4d2e] rounded-xl border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] flex items-center justify-center px-2" on:click={() => handlePlaceBet('take_odds')} on:contextmenu={(e) => handleRemoveBet('take_odds', e)} amount={bets.take_odds}>
+              <BetSpot id="take_odds" betType="ODDS" className="w-[25%] bg-[#1a4d2e] rounded-xl border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] flex items-center justify-center px-2" on:click={() => handlePlaceBet('take_odds')} on:contextmenu={(e) => handleRemoveBet('take_odds', e)} amount={bets.take_odds}>
                 <span class="text-[11px] font-black text-white leading-tight text-center uppercase tracking-tighter">TAKE<br/>ODDS</span>
               </BetSpot>
-              <BetSpot id="passline" isLocked={point !== null} className="flex-1 bg-[#1a4d2e] rounded-xl border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] flex items-center justify-center" on:click={() => handlePlaceBet('passline')} on:contextmenu={(e) => handleRemoveBet('passline', e)} amount={bets.passline}>
+              <BetSpot id="passline" betType="PASS" isLocked={point !== null} className="flex-1 bg-[#1a4d2e] rounded-xl border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] flex items-center justify-center" on:click={() => handlePlaceBet('passline')} on:contextmenu={(e) => handleRemoveBet('passline', e)} amount={bets.passline}>
                 <span class="text-4xl font-serif italic text-white font-medium tracking-widest drop-shadow-lg">Pass Line</span>
               </BetSpot>
             </div>

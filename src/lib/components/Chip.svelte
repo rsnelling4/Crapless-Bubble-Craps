@@ -60,11 +60,11 @@
          style="background: repeating-linear-gradient(90deg, transparent, transparent 2px, rgba(0,0,0,0.5) 2px, rgba(0,0,0,0.5) 4px);"></div>
     
     <!-- Accent Tabs (Outer Ring) -->
-    <div class="absolute inset-0 rounded-full border-[6px] border-transparent">
-      {#each Array(6) as _, i}
+    <div class="absolute inset-0 rounded-full overflow-hidden">
+      {#each Array(3) as _, i}
         <div 
-          class="absolute top-1/2 left-1/2 w-full h-[8px] {config.accent} -translate-x-1/2 -translate-y-1/2"
-          style="transform: translate(-50%, -50%) rotate({i * 60}deg); clip-path: polygon(0 15%, 15% 0, 15% 100%, 0 85%);"
+          class="absolute top-1/2 left-1/2 w-[120%] h-[20%] {config.accent} -translate-x-1/2 -translate-y-1/2 opacity-90"
+          style="transform: translate(-50%, -50%) rotate({i * 60}deg); clip-path: polygon(0 0, 15% 0, 15% 100%, 0 100%, 85% 0, 100% 0, 100% 100%, 85% 100%);"
         ></div>
       {/each}
     </div>
@@ -72,7 +72,7 @@
     <!-- Inner Circle -->
     <div class="absolute inset-[6px] rounded-full bg-white shadow-[inset_0_2px_4px_rgba(0,0,0,0.2)] border border-black/5 flex flex-col items-center justify-center">
       {#if betType}
-        <span class="text-[9px] font-black text-zinc-500 uppercase leading-none -mb-0.5">{betType}</span>
+        <span class="{betType.length > 3 ? 'text-[7px]' : 'text-[9px]'} font-black text-zinc-500 uppercase leading-none -mb-0.5">{betType}</span>
       {/if}
       <span class="{fontSize} font-black text-zinc-800 drop-shadow-sm tracking-tighter leading-none">${displayValue !== null ? displayValue : value}</span>
     </div>
@@ -83,13 +83,13 @@
 
   <!-- Locked Indicator (Outside overflow-hidden) -->
   {#if locked}
-    <div class="absolute inset-0 flex items-center justify-center z-[100]">
+    <div class="absolute -top-1 -left-1 z-[100]">
       <!-- Enhanced Green Glow Effect -->
-      <div class="absolute w-6 h-6 rounded-full bg-[#9eff00]/80 blur-[6px] animate-pulse"></div>
+      <div class="absolute inset-0 rounded-full bg-[#9eff00]/80 blur-[4px] animate-pulse"></div>
       
       <!-- Lock Body (White/Silver like image) -->
-      <div class="relative w-5 h-5 bg-white rounded-md border border-zinc-400 flex items-center justify-center shadow-[0_4px_8px_rgba(0,0,0,0.5),inset_0_1px_1px_white]">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-3 h-3 text-zinc-800">
+      <div class="relative w-4 h-4 bg-white rounded-sm border border-zinc-400 flex items-center justify-center shadow-[0_2px_4px_rgba(0,0,0,0.5),inset_0_1px_1px_white]">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-2.5 h-2.5 text-zinc-800">
           <path fill-rule="evenodd" d="M12 1.5a5.25 5.25 0 0 0-5.25 5.25v3a3 3 0 0 0-3 3v6.75a3 3 0 0 0 3 3h10.5a3 3 0 0 0 3-3v-6.75a3 3 0 0 0-3-3v-3c0-2.9-2.35-5.25-5.25-5.25Zm3.75 8.25v-3a3.75 3.75 0 1 0-7.5 0v3h7.5Z" clip-rule="evenodd" />
         </svg>
       </div>

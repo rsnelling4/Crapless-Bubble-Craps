@@ -44,7 +44,7 @@
         <img src="https://img.icons8.com/color/96/dice.png" alt="logo" class="w-16 h-16 drop-shadow-lg" />
       </div>
       <h1 class="text-3xl font-black text-white tracking-tighter uppercase italic">
-        Crapless Bubble <span class="text-emerald-400">Craps</span>
+        Bobby's Bubble <span class="text-emerald-400">Craps</span>
       </h1>
       <p class="text-zinc-400 text-sm font-medium mt-1">Authentic Casino Craps Experience</p>
     </div>

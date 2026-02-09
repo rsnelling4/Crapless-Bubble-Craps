@@ -22,6 +22,8 @@
     export let hardwayCounter = null;
     export let reverse = false;
     export let status = null;
+    export let hideChips = false;
+    export let betType = "";
     // export let isAutoOff = false; // Removed per user request
 
     const diceDots = {
@@ -58,6 +60,19 @@
     }
 
     $: chips = amount > 0 ? getChips(amount) : [];
+    
+    function getChipStyle(index, betId) {
+        // Use a simple hash based on betId and index for stable "randomness"
+        const seed = (betId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) + index * 137);
+        const randomX = ((seed * 123.456) % 16) - 8; // -8 to 8px
+        const randomY = ((seed * 789.012) % 8) - 4;  // -4 to 4px
+        const randomRotate = ((seed * 456.789) % 60) - 30; // -30 to 30deg
+        
+        return `
+            z-index: ${index};
+            transform: translate(${randomX}px, ${-index * 5 + randomY}px) rotate(${randomRotate}deg);
+        `;
+    }
 </script>
 
 <button
@@ -125,29 +140,21 @@
     
     <slot name="bottom" />
     
-    {#if amount > 0}
+    {#if amount > 0 && !hideChips}
         <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
             <div class="relative w-12 h-12 flex items-center justify-center">
                 {#each chips as chipVal, i}
                     <div
                         class="absolute"
-                        style="
-                            z-index: {i};
-                            transform: translateY(-{i * 3}px);
-                        "
+                        style={getChipStyle(i, id)}
                     >
                         <Chip 
                             value={chipVal} 
-                            size="w-9 h-9" 
-                            fontSize="text-[8px]" 
+                            size="w-12 h-12" 
+                            fontSize="text-[10px]" 
                             locked={isLocked && i === chips.length - 1}
+                            betType={betType}
                         />
-
-                        {#if i === chips.length - 1}
-                            <div class="absolute -top-6 left-1/2 -translate-x-1/2 bg-zinc-900 px-1.5 py-0.5 rounded text-[8px] border border-white/20 whitespace-nowrap shadow-xl">
-                                ${amount}
-                            </div>
-                        {/if}
                     </div>
                 {/each}
             </div>
