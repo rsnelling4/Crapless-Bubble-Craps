@@ -766,33 +766,6 @@
       delete bets.horn_bet;
     }
 
-    // World Bet (ALWAYS WORKING)
-    if (currentBets.world) {
-      const unit = currentBets.world / 5;
-      if ([2, 3, 11, 12, 7].includes(total)) {
-        let win = 0;
-        if (total === 2 || total === 12) {
-          win = unit * 30 - (4 * unit);
-          winnings += unit + win;
-          lastRollResult += `World $${win.toFixed(2)} WIN. `;
-        } else if (total === 3 || total === 11) {
-          win = unit * 15 - (4 * unit);
-          winnings += unit + win;
-          lastRollResult += `World $${win.toFixed(2)} WIN. `;
-        } else if (total === 7) {
-          // Push condition: Any 7 unit wins 4:1, others lose.
-          // Total returned is the original bet.
-          winnings += currentBets.world;
-          lastRollResult += `World $${currentBets.world.toFixed(2)} PUSH. `;
-        }
-        winningBets.push('world');
-      } else {
-        losingBets.push('world');
-        lastRollResult += `World $${currentBets.world.toFixed(2)} LOSS. `;
-      }
-      delete bets.world;
-    }
-
     // C&E (ALWAYS WORKING)
     if (currentBets.bet_ce) {
       if ([2, 3, 12, 11].includes(total)) {
@@ -1572,8 +1545,8 @@
                     </div>
                   </div>
 
-                  <!-- ANY CRAPS & WORLD -->
-                  <div class="h-[20%] flex gap-2">
+                  <!-- ANY CRAPS -->
+                  <div class="h-[20%] flex">
                     <BetSpot 
                       id="any_craps" 
                       className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl flex flex-row items-center justify-between px-4 relative overflow-hidden" 
@@ -1586,20 +1559,6 @@
                         <span class="uppercase tracking-tighter leading-none text-xl font-black text-[#ff3b30] drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)] italic">ANY CRAPS</span>
                       </div>
                       <span class="text-sm font-black text-white drop-shadow-md leading-none">7:1</span>
-                    </BetSpot>
-
-                    <BetSpot 
-                      id="world" 
-                      className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 shadow-[0_0_20px_rgba(0,0,0,0.6),inset_0_0_15px_rgba(0,0,0,0.4)] rounded-xl flex flex-row items-center justify-between px-4 relative overflow-hidden" 
-                      on:click={() => handlePlaceBet('world')} 
-                      on:contextmenu={(e) => handleRemoveBet('world', e)} 
-                      amount={bets.world}
-                    >
-                      <span class="text-xs font-black text-white/40">•</span>
-                      <div class="flex-1 flex justify-center">
-                        <span class="uppercase tracking-tighter leading-none text-xl font-black text-yellow-500 drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)] italic">WORLD</span>
-                      </div>
-                      <span class="text-xs font-black text-white/40">•</span>
                     </BetSpot>
                   </div>
                 </div>
