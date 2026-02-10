@@ -20,7 +20,7 @@ const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
 
 // Initialize Services with robust settings for development/preview environments
 export const db = initializeFirestore(app, {
-  // experimentalForceLongPolling: true, // Removed as it can cause slowdowns in some environments
+  experimentalForceLongPolling: true, // Re-enabled to support restrictive networks (e.g., proxies, firewalls)
   localCache: persistentLocalCache({
     tabManager: persistentMultipleTabManager()
   })
