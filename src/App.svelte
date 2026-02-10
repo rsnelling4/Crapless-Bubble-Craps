@@ -198,7 +198,8 @@
       balance: Number(balance), // Ensure it's a number
       highestBalance: Math.max(Number(user.highestBalance || 0), Number(sessionHighestBalance)),
       largestWin: Math.max(Number(user.largestWin || 0), Number(sessionLargestWin)),
-      largestLoss: Math.max(Number(user.largestLoss || 0), Number(sessionLargestLoss))
+      largestLoss: Math.max(Number(user.largestLoss || 0), Number(sessionLargestLoss)),
+      resetCount: Number(user.resetCount || 0) // Ensure it's a number
     };
     
     // Only update if something actually changed to avoid unnecessary re-renders/syncs
@@ -207,16 +208,25 @@
     if (hasChanged) {
       console.log('App: local user state updated', {
         oldBalance: user.balance,
-        newBalance: updatedUser.balance
+        newBalance: updatedUser.balance,
+        oldResets: user.resetCount,
+        newResets: updatedUser.resetCount
       });
       user = updatedUser;
+    } else if (!immediate) {
+      // If nothing changed and not immediate, just return
+      return;
     }
     
+    // If it's immediate and something changed (or we want to force it)
     if (immediate) {
       if (updateTimeout) clearTimeout(updateTimeout);
       console.log('App: pushing immediate update to PlayFab');
       return await updateGlobalUser(user);
     }
+
+    // For non-immediate, we only proceed if hasChanged is true
+    if (!hasChanged) return;
 
     // Update leaderboard service (debounced for frequent changes)
     if (updateTimeout) clearTimeout(updateTimeout);
@@ -506,13 +516,31 @@
         const globalMe = users.find(u => u.username.toLowerCase() === user.username.toLowerCase());
         if (globalMe) {
           // Sync current session state with global state if global is newer/higher
-          sessionHighestBalance = Math.max(sessionHighestBalance, globalMe.highestBalance || 0);
-          sessionLargestWin = Math.max(sessionLargestWin, globalMe.largestWin || 0);
-          sessionLargestLoss = Math.max(sessionLargestLoss, globalMe.largestLoss || 0);
+          const newHighestBalance = Math.max(sessionHighestBalance, globalMe.highestBalance || 0);
+          const newLargestWin = Math.max(sessionLargestWin, globalMe.largestWin || 0);
+          const newLargestLoss = Math.max(sessionLargestLoss, globalMe.largestLoss || 0);
+          const newResetCount = Math.max(Number(user.resetCount || 0), Number(globalMe.resetCount || 0));
+          
+          // Update session variables
+          sessionHighestBalance = newHighestBalance;
+          sessionLargestWin = newLargestWin;
+          sessionLargestLoss = newLargestLoss;
           
           if (globalMe.balance !== balance) {
              balance = globalMe.balance;
           }
+
+          // Update local user object immediately to prevent saveProgress from seeing a "change" 
+          // that it needs to sync back to PlayFab
+          user = { 
+            ...user, 
+            balance: Number(balance),
+            highestBalance: newHighestBalance,
+            largestWin: newLargestWin,
+            largestLoss: newLargestLoss,
+            resetCount: newResetCount 
+          };
+
           saveProgress();
         }
       }
