@@ -474,6 +474,7 @@
   let showOddsPrompt = false;
   let showMoveBetPrompt = false;
   let showCommissionPrompt = false;
+  let hasPaidCommissionThisRound = false;
   let commissionData = { id: '', amount: 0, betType: '', commission: 0 };
   let moveBetData = { id: '', amount: 0 };
   let message = "MINIMUM TOTAL BET: $3";
@@ -757,8 +758,22 @@
 
     targetPoints.forEach(p => {
       const placeId = `place_${p}`;
-      balance -= selectedChip;
-      bets[placeId] = (bets[placeId] || 0) + selectedChip;
+      const buyId = `buy_${p}`;
+      
+      if (isBuyBetter(p, selectedChip) && hasPaidCommissionThisRound) {
+        const commission = selectedChip * 0.05;
+        if (balance >= selectedChip + commission) {
+          balance -= (selectedChip + commission);
+          bets[buyId] = (bets[buyId] || 0) + selectedChip;
+        } else {
+          // Fallback to place if not enough for commission
+          balance -= selectedChip;
+          bets[placeId] = (bets[placeId] || 0) + selectedChip;
+        }
+      } else {
+        balance -= selectedChip;
+        bets[placeId] = (bets[placeId] || 0) + selectedChip;
+      }
     });
 
     bets = bets;
@@ -767,6 +782,20 @@
 
   // --- Logic ---
   let currentRoll = [1, 1];
+
+  // Helper to determine if Buy is better than Place for a given number and amount
+  const isBuyBetter = (n, amount) => {
+    const pOdds = placeOdds[n];
+    const bOdds = trueOdds[n];
+    const commission = amount * 0.05;
+
+    // Calculate effective return for Buy bet (taking commission into account)
+    const totalCost = amount + commission;
+    const totalReturn = amount + (amount * bOdds);
+    const effectiveBuyMultiplier = totalReturn / totalCost;
+
+    return effectiveBuyMultiplier > pOdds;
+  };
   
   // Track stats for persistence
   let sessionHighestBalance = 300;
@@ -847,6 +876,16 @@
         return;
       }
       
+      if (hasPaidCommissionThisRound) {
+        // Automatically pay if already accepted this round
+        balance -= (selectedChip + commission);
+        bets[id] = (bets[id] || 0) + selectedChip;
+        bets = bets;
+        playChipSound('place');
+        message = `${id.startsWith('buy_') ? 'BUY' : 'LAY'} BET PLACED`;
+        return;
+      }
+
       commissionData = {
         id,
         amount: selectedChip,
@@ -855,6 +894,16 @@
       };
       showCommissionPrompt = true;
       return; // Wait for confirmation
+    }
+
+    // Auto-selection logic for point numbers (place_n)
+    if (id.startsWith('place_')) {
+      const n = parseInt(id.split('_')[1]);
+      if (isBuyBetter(n, selectedChip)) {
+        // Buy is better, redirect to buy logic
+        handlePlaceBet(`buy_${n}`);
+        return;
+      }
     }
 
     balance -= selectedChip;
@@ -870,7 +919,9 @@
     bets[id] = (bets[id] || 0) + amount;
     bets = bets;
     showCommissionPrompt = false;
+    hasPaidCommissionThisRound = true; // Remember for this round
     message = "COMMISSION PAID";
+    playChipSound('place');
   }
 
   function handleCommissionDecline() {
@@ -920,14 +971,25 @@
 
     // Add to target
     const targetId = `${type}_${targetNumber}`;
-    bets[targetId] = (bets[targetId] || 0) + amount;
     
-    // Auto-Buy logic for Place bets moved to $20+
-    if (type === 'place' && bets[targetId] >= 20) {
-      bets[`buy_${targetNumber}`] = (bets[`buy_${targetNumber}`] || 0) + bets[targetId];
-      delete bets[targetId];
-      message = `MOVED TO BUY ${targetNumber}`;
+    // Auto-selection logic for point numbers
+    if (type === 'place' && isBuyBetter(targetNumber, amount)) {
+      if (hasPaidCommissionThisRound) {
+        const commission = amount * 0.05;
+        if (balance >= commission) {
+          balance -= commission;
+          bets[`buy_${targetNumber}`] = (bets[`buy_${targetNumber}`] || 0) + amount;
+          message = `MOVED TO BUY ${targetNumber}`;
+        } else {
+          bets[targetId] = (bets[targetId] || 0) + amount;
+          message = `MOVED TO PLACE ${targetNumber} (NO CREDIT FOR BUY)`;
+        }
+      } else {
+        bets[targetId] = (bets[targetId] || 0) + amount;
+        message = `MOVED TO PLACE ${targetNumber}`;
+      }
     } else {
+      bets[targetId] = (bets[targetId] || 0) + amount;
       message = `MOVED TO ${type.toUpperCase()} ${targetNumber}`;
     }
 
@@ -1475,10 +1537,11 @@
     }
 
     // Check for Round Recap (Seven Out)
+    // Reset commission prompt status on new shooter/round
     if (total === 7 && isPointSet) {
        showRecap = true;
        roundRecapText = `SHOOTER SEVEN-OUT! ROUND P/L: ${rollerTally >= 0 ? '+' : ''}$${Math.abs(rollerTally).toFixed(2)}`;
-       // The previousWasSevenOut flag is already set in the point block above
+       hasPaidCommissionThisRound = false; 
     }
 
     // Force reactivity for all stats variables
