@@ -758,22 +758,8 @@
 
     targetPoints.forEach(p => {
       const placeId = `place_${p}`;
-      const buyId = `buy_${p}`;
-      
-      if (isBuyBetter(p, selectedChip) && hasPaidCommissionThisRound) {
-        const commission = selectedChip * 0.05;
-        if (balance >= selectedChip + commission) {
-          balance -= (selectedChip + commission);
-          bets[buyId] = (bets[buyId] || 0) + selectedChip;
-        } else {
-          // Fallback to place if not enough for commission
-          balance -= selectedChip;
-          bets[placeId] = (bets[placeId] || 0) + selectedChip;
-        }
-      } else {
-        balance -= selectedChip;
-        bets[placeId] = (bets[placeId] || 0) + selectedChip;
-      }
+      balance -= selectedChip;
+      bets[placeId] = (bets[placeId] || 0) + selectedChip;
     });
 
     bets = bets;
@@ -783,20 +769,6 @@
   // --- Logic ---
   let currentRoll = [1, 1];
 
-  // Helper to determine if Buy is better than Place for a given number and amount
-  const isBuyBetter = (n, amount) => {
-    const pOdds = placeOdds[n];
-    const bOdds = trueOdds[n];
-    const commission = amount * 0.05;
-
-    // Calculate effective return for Buy bet (taking commission into account)
-    const totalCost = amount + commission;
-    const totalReturn = amount + (amount * bOdds);
-    const effectiveBuyMultiplier = totalReturn / totalCost;
-
-    return effectiveBuyMultiplier > pOdds;
-  };
-  
   // Track stats for persistence
   let sessionHighestBalance = 300;
   let sessionLargestWin = 0;
@@ -896,20 +868,9 @@
       return; // Wait for confirmation
     }
 
-    // Auto-selection logic for point numbers (place_n)
-    if (id.startsWith('place_')) {
-      const n = parseInt(id.split('_')[1]);
-      if (isBuyBetter(n, selectedChip)) {
-        // Buy is better, redirect to buy logic
-        handlePlaceBet(`buy_${n}`);
-        return;
-      }
-    }
-
     balance -= selectedChip;
     bets[id] = (bets[id] || 0) + selectedChip;
     playChipSound('place');
-
     bets = bets;
   }
 
@@ -971,27 +932,8 @@
 
     // Add to target
     const targetId = `${type}_${targetNumber}`;
-    
-    // Auto-selection logic for point numbers
-    if (type === 'place' && isBuyBetter(targetNumber, amount)) {
-      if (hasPaidCommissionThisRound) {
-        const commission = amount * 0.05;
-        if (balance >= commission) {
-          balance -= commission;
-          bets[`buy_${targetNumber}`] = (bets[`buy_${targetNumber}`] || 0) + amount;
-          message = `MOVED TO BUY ${targetNumber}`;
-        } else {
-          bets[targetId] = (bets[targetId] || 0) + amount;
-          message = `MOVED TO PLACE ${targetNumber} (NO CREDIT FOR BUY)`;
-        }
-      } else {
-        bets[targetId] = (bets[targetId] || 0) + amount;
-        message = `MOVED TO PLACE ${targetNumber}`;
-      }
-    } else {
-      bets[targetId] = (bets[targetId] || 0) + amount;
-      message = `MOVED TO ${type.toUpperCase()} ${targetNumber}`;
-    }
+    bets[targetId] = (bets[targetId] || 0) + amount;
+    message = `MOVED TO ${type.toUpperCase()} ${targetNumber}`;
 
     bets = bets;
   }
@@ -1146,8 +1088,8 @@
         }
       }
       if (betStatus[id] === 'off') return false;
-      // For num_ prefix (Place bets)
-      if (id.startsWith('num_') && betStatus[id] === 'off') return false;
+      // For num_ prefix (Place bets) - also covers place_manual_
+      if (id.startsWith('place_') && betStatus[id] === 'off') return false;
       // Hardways auto-off on come-out if not manually on
       if (point === null && id.startsWith('hard_') && betStatus[id] !== 'on') return false;
       return true;
@@ -1453,16 +1395,27 @@
 
     // Place & Buy Bets (Subject to OFF status)
     numbers.forEach(n => {
+      // Large tile Place bets
       const placeId = `place_${n}`;
       if (currentBets[placeId] && isBetActive(placeId)) {
         if (total === n) {
           const win = Math.floor(currentBets[placeId] * placeOdds[n]);
-          winnings += win; // Only add profit, bet stays
+          winnings += win;
           rollProfit += win;
           recordWin(placeId, win);
           lastRollResult += `Place ${n} $${win.toFixed(2)} WIN. `;
-        } else if (total === 7) {
-          // Already handled in point === null / point !== null blocks for total === 7
+        }
+      }
+
+      // Manual Place button bets
+      const manualPlaceId = `place_manual_${n}`;
+      if (currentBets[manualPlaceId] && isBetActive(manualPlaceId)) {
+        if (total === n) {
+          const win = Math.floor(currentBets[manualPlaceId] * placeOdds[n]);
+          winnings += win;
+          rollProfit += win;
+          recordWin(manualPlaceId, win);
+          lastRollResult += `Place ${n} $${win.toFixed(2)} WIN. `;
         }
       }
 
@@ -2363,14 +2316,20 @@
                 </div>
 
                 <BetSpot id={`buy_${n}`} label="BUY" betType="BUY" className="h-[16%] bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-xs" on:click={() => handlePlaceBet(`buy_${n}`)} on:contextmenu={(e) => handleRemoveBet(`buy_${n}`, e)} amount={bets[`buy_${n}`]} status={betStatus[`buy_${n}`]} />
-                <BetSpot id={`place_${n}`} label={n === 6 ? 'SIX' : n === 9 ? 'NINE' : n} type="number" hideChips={true} className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.5),inset_0_0_15px_rgba(0,0,0,0.4)]" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} status={betStatus[`place_${n}`]}>
+                <BetSpot id={`place_${n}`} label={n === 6 ? 'SIX' : n === 9 ? 'NINE' : n} type="number" className="flex-1 bg-[#1a4d2e] border-2 border-emerald-400/50 rounded-xl shadow-[0_0_20px_rgba(0,0,0,0.5),inset_0_0_15px_rgba(0,0,0,0.4)]" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} status={betStatus[`place_${n}`]}>
+                  <!-- Come Bet chips displayed on the large number tile -->
+                  {#if bets[`come_${n}`]}
+                    <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-30 translate-x-3 -translate-y-3">
+                      <Chip value={bets[`come_${n}`]} size="w-10 h-10" fontSize="text-[8px]" betType="COME" />
+                    </div>
+                  {/if}
                 </BetSpot>
                 <div class="h-[18%] flex gap-1 relative">
-                  <BetSpot id={`place_label_${n}`} label="PLACE" betType="PLACE" className="flex-1 bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-xs" on:click={() => handlePlaceBet(`place_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_${n}`, e)} amount={bets[`place_${n}`]} status={betStatus[`place_${n}`]} />
+                  <BetSpot id={`place_manual_${n}`} label="PLACE" betType="PLACE" className="flex-1 bg-emerald-700/50 border-2 border-emerald-400/50 rounded-xl shadow-[0_0_15px_rgba(0,0,0,0.4),inset_0_0_10px_rgba(0,0,0,0.3)]" labelClassName="leading-none text-xs" on:click={() => handlePlaceBet(`place_manual_${n}`)} on:contextmenu={(e) => handleRemoveBet(`place_manual_${n}`, e)} amount={bets[`place_manual_${n}`]} status={betStatus[`place_manual_${n}`]} />
                   
-                  <!-- Come Bet established on this number -->
+                  <!-- Established Come Bet indicator (now visual only as chips are on the tile) -->
                   {#if bets[`come_${n}`]}
-                    <div class="absolute -top-16 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+                    <div class="absolute -top-16 left-1/2 -translate-x-1/2 z-30 pointer-events-none opacity-0">
                       <Chip value={bets[`come_${n}`]} size="w-10 h-10" fontSize="text-[8px]" betType="COME" />
                     </div>
                   {/if}
