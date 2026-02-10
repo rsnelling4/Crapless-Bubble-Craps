@@ -124,11 +124,11 @@ export async function loginUser(username, password) {
       username,
       nickname: profile?.DisplayName || username,
       uid: loginResult.PlayFabId,
-      balance: getStat('Balance') ?? 300,
-      highestBalance: getStat('highestBalance') ?? (getStat('Balance') ?? 300),
-      largestWin: getStat('largestWin') ?? 0,
-      largestLoss: getStat('largestLoss') ?? 0,
-      resetCount: getStat('resetCount') ?? 0,
+      balance: Number(getStat('Balance') ?? 300),
+      highestBalance: Number(getStat('highestBalance') ?? (getStat('Balance') ?? 300)),
+      largestWin: Number(getStat('largestWin') ?? 0),
+      largestLoss: Number(getStat('largestLoss') ?? 0),
+      resetCount: Number(getStat('resetCount') ?? 0),
       mode: 'user'
     };
 
@@ -218,16 +218,16 @@ export async function fetchGlobalUsers() {
           const user = userMap.get(uid);
           
           // Update the specific stat for this leaderboard
-          if (statName === 'Balance') user.balance = entry.StatValue;
-          else if (statName === 'highestBalance') user.highestBalance = entry.StatValue;
-          else if (statName === 'largestWin') user.largestWin = entry.StatValue;
-          else if (statName === 'largestLoss') user.largestLoss = entry.StatValue;
-          else if (statName === 'resetCount') user.resetCount = entry.StatValue;
+          if (statName === 'Balance') user.balance = Number(entry.StatValue || 0);
+          else if (statName === 'highestBalance') user.highestBalance = Number(entry.StatValue || 0);
+          else if (statName === 'largestWin') user.largestWin = Number(entry.StatValue || 0);
+          else if (statName === 'largestLoss') user.largestLoss = Number(entry.StatValue || 0);
+          else if (statName === 'resetCount') user.resetCount = Number(entry.StatValue || 0);
 
           // Also supplement with any other stats found in the profile
           profileStats.forEach(s => {
             const name = s.Name || s.StatisticName;
-            const val = s.Value;
+            const val = Number(s.Value || 0);
             if (name === 'Balance') user.balance = val;
             else if (name === 'highestBalance') user.highestBalance = val;
             else if (name === 'largestWin') user.largestWin = val;

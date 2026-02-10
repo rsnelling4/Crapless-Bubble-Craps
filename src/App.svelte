@@ -239,7 +239,7 @@
       user = {
         ...user,
         balance: 300,
-        resetCount: (user.resetCount || 0) + 1
+        resetCount: Number(user.resetCount || 0) + 1
       };
       saveProgress(true); // Immediate sync on reset
     }
