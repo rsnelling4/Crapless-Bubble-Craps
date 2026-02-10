@@ -256,6 +256,7 @@
   }
 
   let unsubscribeLeaderboard;
+  let unsubscribeAuth;
   let heartbeatInterval;
 
   async function startLeaderboardSync() {
@@ -315,7 +316,7 @@
       await startLeaderboardSync();
 
       // Subscribe to Auth state changes for session persistence
-      subscribeToAuth((userData) => {
+      unsubscribeAuth = subscribeToAuth((userData) => {
         if (userData && !user) {
           login({ ...userData, mode: 'user' });
         }
@@ -331,6 +332,7 @@
 
   onDestroy(() => {
     if (unsubscribeLeaderboard) unsubscribeLeaderboard();
+    if (unsubscribeAuth) unsubscribeAuth();
     if (heartbeatInterval) clearInterval(heartbeatInterval);
   });
 

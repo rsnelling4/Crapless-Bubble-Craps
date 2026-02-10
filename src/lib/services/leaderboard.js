@@ -42,18 +42,44 @@ async function getDocWithFallback(docRef) {
  */
 export async function signupUser(username, password, nickname) {
   console.log('leaderboard: signupUser called', { username, nickname });
+  
+  if (!username || username.length < 3) {
+    throw new Error('Username must be at least 3 characters long');
+  }
+  
   const lowerUsername = username.toLowerCase();
   const email = `${lowerUsername}@craps.local`;
   
   try {
-    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    // 1. Check if username document already exists in Firestore
+    // This is the first line of defense for unique usernames
+    const userRef = doc(db, USERS_COLLECTION, lowerUsername);
+    const existingDoc = await getDoc(userRef);
+    
+    if (existingDoc.exists()) {
+      throw { code: 'auth/email-already-in-use', message: 'This username is already taken.' };
+    }
+
+    // 2. Create Firebase Auth account
+    let userCredential;
+    try {
+      userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    } catch (authError) {
+      console.error('leaderboard: auth creation failed', authError);
+      // Map common errors to friendly ones if needed
+      if (authError.code === 'auth/email-already-in-use') {
+        throw { code: 'auth/email-already-in-use', message: 'This username is already taken.' };
+      }
+      throw authError;
+    }
+
     const user = userCredential.user;
     console.log('leaderboard: auth user created', user.uid);
 
-    // Update Firebase Auth profile
+    // 3. Update Firebase Auth profile
     await updateProfile(user, { displayName: nickname });
 
-    // Create Firestore document
+    // 4. Create Firestore document
     const userData = {
       username, // Keep original casing for display
       nickname,
@@ -66,7 +92,8 @@ export async function signupUser(username, password, nickname) {
     };
 
     console.log('leaderboard: setting firestore doc', lowerUsername);
-    await setDoc(doc(db, USERS_COLLECTION, lowerUsername), userData);
+    await setDoc(userRef, userData);
+    
     return { ...userData, uid: user.uid };
   } catch (error) {
     console.error("leaderboard: signup error:", error);
@@ -81,6 +108,7 @@ export async function loginUser(username, password) {
   console.log('leaderboard: loginUser called', username);
   const lowerUsername = username.toLowerCase();
   const email = `${lowerUsername}@craps.local`;
+  
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
@@ -88,14 +116,28 @@ export async function loginUser(username, password) {
 
     // Fetch stats from Firestore
     console.log('leaderboard: fetching firestore doc', lowerUsername);
-    const userDoc = await getDocWithFallback(doc(db, USERS_COLLECTION, lowerUsername));
+    const userRef = doc(db, USERS_COLLECTION, lowerUsername);
+    const userDoc = await getDoc(userRef);
+    
     if (userDoc.exists()) {
       console.log('leaderboard: firestore doc found');
-      return { ...userDoc.data(), uid: user.uid };
+      const data = userDoc.data();
+      return { ...data, uid: user.uid };
     } else {
-      console.log('leaderboard: firestore doc NOT found, using fallback');
-      // Fallback if doc doesn't exist yet
-      return { username, nickname: user.displayName || username, balance: 300, uid: user.uid };
+      console.log('leaderboard: firestore doc NOT found, creating auto-repair profile');
+      // If Auth exists but Firestore doc is missing, auto-create it
+      const userData = {
+        username: username, // Fallback to provided username
+        nickname: user.displayName || username,
+        balance: 300,
+        highestBalance: 300,
+        largestWin: 0,
+        largestLoss: 0,
+        resetCount: 0,
+        lastUpdate: serverTimestamp()
+      };
+      await setDoc(userRef, userData);
+      return { ...userData, uid: user.uid };
     }
   } catch (error) {
     console.error("leaderboard: login error:", error);
@@ -113,23 +155,79 @@ export async function logoutUser() {
 /**
  * Subscribes to auth state changes
  */
+let currentUserUnsubscribe = null;
+
+/**
+ * Subscribes to Auth state changes and real-time user document updates.
+ * Returns an unsubscribe function that cleans up both Auth and Firestore listeners.
+ */
 export function subscribeToAuth(callback) {
-  return onAuthStateChanged(auth, async (user) => {
+  const authUnsubscribe = onAuthStateChanged(auth, async (user) => {
+    // Clean up existing Firestore listener if any
+    if (currentUserUnsubscribe) {
+      currentUserUnsubscribe();
+      currentUserUnsubscribe = null;
+    }
+
     if (user) {
-      // User is signed in, fetch their Firestore data
       const lowerUsername = user.email.split('@')[0];
       console.log('leaderboard: auth state change - logged in', lowerUsername);
-      const userDoc = await getDocWithFallback(doc(db, USERS_COLLECTION, lowerUsername));
-      if (userDoc.exists()) {
-        callback({ ...userDoc.data(), uid: user.uid });
-      } else {
-        callback({ username: lowerUsername, nickname: user.displayName || lowerUsername, balance: 300, uid: user.uid });
-      }
+      const userRef = doc(db, USERS_COLLECTION, lowerUsername);
+
+      // Start real-time listener for the user's document
+      currentUserUnsubscribe = onSnapshot(userRef, async (snapshot) => {
+        if (snapshot.exists()) {
+          console.log('leaderboard: user data updated in real-time');
+          callback({ ...snapshot.data(), uid: user.uid });
+        } else {
+          console.warn('leaderboard: auth session found but no firestore doc. Attempting auto-repair.');
+          try {
+            const userData = {
+              username: lowerUsername,
+              nickname: user.displayName || lowerUsername,
+              balance: 300,
+              highestBalance: 300,
+              largestWin: 0,
+              largestLoss: 0,
+              resetCount: 0,
+              lastUpdate: serverTimestamp()
+            };
+            await setDoc(userRef, userData);
+            // The onSnapshot listener will trigger again once setDoc completes
+          } catch (error) {
+            console.error('leaderboard: auto-repair failed:', error);
+            // Fallback to avoid hanging
+            callback({ 
+              username: lowerUsername, 
+              nickname: user.displayName || lowerUsername, 
+              balance: 300, 
+              uid: user.uid 
+            });
+          }
+        }
+      }, (error) => {
+        console.error('leaderboard: onSnapshot error:', error);
+        // On fatal listener error, try a one-time fetch as fallback
+        getDoc(userRef).then(docSnap => {
+          if (docSnap.exists()) {
+            callback({ ...docSnap.data(), uid: user.uid });
+          }
+        }).catch(e => console.error('leaderboard: snapshot fallback failed:', e));
+      });
     } else {
       console.log('leaderboard: auth state change - logged out');
       callback(null);
     }
   });
+
+  // Return a combined unsubscribe function
+  return () => {
+    authUnsubscribe();
+    if (currentUserUnsubscribe) {
+      currentUserUnsubscribe();
+      currentUserUnsubscribe = null;
+    }
+  };
 }
 
 /**

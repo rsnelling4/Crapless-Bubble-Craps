@@ -20,8 +20,10 @@ const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
 
 // Initialize Services with robust settings
 export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true, 
-  // We use standard persistence without complex tab management to reduce errors
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager()
+  }),
+  experimentalForceLongPolling: true
 });
 
 export const auth = getAuth(app);
