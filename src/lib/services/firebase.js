@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
+import { getAuth, setPersistence, browserLocalPersistence } from "firebase/auth";
 import { getAnalytics } from "firebase/analytics";
 
 // Your web app's Firebase configuration
@@ -27,5 +27,18 @@ export const db = initializeFirestore(app, {
 });
 
 export const auth = getAuth(app);
+
+// Set persistent auth state
+if (typeof window !== 'undefined') {
+  setPersistence(auth, browserLocalPersistence).catch((error) => {
+    console.error("Auth persistence error:", error);
+  });
+}
+
+// Add a helper to check if we are in a production environment
+export const isProd = typeof window !== 'undefined' && 
+  (window.location.hostname === 'bobbys-craps.web.app' || 
+   window.location.hostname === 'bobbys-craps.firebaseapp.com' ||
+   window.location.hostname === 'rsnelling4.github.io');
 
 export default app;

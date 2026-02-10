@@ -5,6 +5,7 @@
   const dispatch = createEventDispatcher();
 
   export let users = []; // Array of { username, nickname, highestBalance, largestWin, largestLoss, resetCount, isLocal, isYou }
+  export let loading = false;
 
   // Helper to determine if a user is truly online (updated in the last 60 seconds)
   function isUserOnline(lastUpdate) {
@@ -52,12 +53,23 @@
           </div>
         </div>
       </div>
-      <button 
-        on:click={() => dispatch('close')}
-        class="p-2 rounded-xl bg-black/40 border border-white/10 text-zinc-400 hover:text-white transition-all hover:scale-110"
-      >
-        <X size={24} />
-      </button>
+      <div class="flex items-center gap-3">
+        <button 
+          on:click={() => dispatch('refresh')}
+          disabled={loading}
+          class="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 transition-all disabled:opacity-50"
+          title="Refresh Stats"
+        >
+          <RotateCcw size={18} class={loading ? 'animate-spin' : ''} />
+          <span class="text-xs font-black uppercase tracking-widest">Refresh</span>
+        </button>
+        <button 
+          on:click={() => dispatch('close')}
+          class="p-2 rounded-xl bg-black/40 border border-white/10 text-zinc-400 hover:text-white transition-all hover:scale-110"
+        >
+          <X size={24} />
+        </button>
+      </div>
     </div>
 
     <!-- Table -->

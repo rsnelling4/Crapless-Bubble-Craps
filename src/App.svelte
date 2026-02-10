@@ -174,6 +174,11 @@
     balance = userData.balance;
     showAuth = false;
     
+    // Initialize session stats with user's current record
+    sessionHighestBalance = userData.highestBalance || userData.balance;
+    sessionLargestWin = userData.largestWin || 0;
+    sessionLargestLoss = userData.largestLoss || 0;
+    
     // Reset hardway counters for new sessions/players
     hardwayCounters = { 4: 0, 6: 0, 8: 0, 10: 0 };
     
@@ -200,26 +205,17 @@
   }
 
   let globalUpdateTimeout;
-  function saveProgress(rollStats = null) {
+  function saveProgress() {
     if (!user || user.mode === 'guest') return;
     const db = getDB();
     const userIdx = db.users.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
     if (userIdx !== -1) {
       db.users[userIdx].balance = balance;
       
-      // Update stats
-      if (balance > (db.users[userIdx].highestBalance || 0)) {
-        db.users[userIdx].highestBalance = balance;
-      }
-      
-      if (rollStats) {
-        if (rollStats.win > (db.users[userIdx].largestWin || 0)) {
-          db.users[userIdx].largestWin = rollStats.win;
-        }
-        if (rollStats.loss > (db.users[userIdx].largestLoss || 0)) {
-          db.users[userIdx].largestLoss = rollStats.loss;
-        }
-      }
+      // Update stats using session trackers
+      db.users[userIdx].highestBalance = Math.max(db.users[userIdx].highestBalance || 0, sessionHighestBalance);
+      db.users[userIdx].largestWin = Math.max(db.users[userIdx].largestWin || 0, sessionLargestWin);
+      db.users[userIdx].largestLoss = Math.max(db.users[userIdx].largestLoss || 0, sessionLargestLoss);
       
       saveDB(db);
       // Update local user object too
@@ -236,6 +232,12 @@
   function resetBalance() {
     if (!user) return;
     balance = 300;
+    
+    // Reset session stats for the new bankroll
+    sessionHighestBalance = 300;
+    sessionLargestWin = 0;
+    sessionLargestLoss = 0;
+
     if (user.mode !== 'guest') {
       const db = getDB();
       const userIdx = db.users.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
@@ -270,10 +272,29 @@
       // If logged in, check if global data is more advanced
       if (user && user.mode !== 'guest') {
         const globalMe = users.find(u => u.username.toLowerCase() === user.username.toLowerCase());
-        if (globalMe && (globalMe.highestBalance > user.highestBalance || globalMe.balance !== user.balance)) {
-          user.balance = globalMe.balance;
-          user.highestBalance = Math.max(user.highestBalance, globalMe.highestBalance);
-          saveProgress();
+        if (globalMe) {
+          // Update session stats if global data is more advanced
+          let changed = false;
+          if (globalMe.highestBalance > sessionHighestBalance) {
+            sessionHighestBalance = globalMe.highestBalance;
+            changed = true;
+          }
+          if (globalMe.largestWin > sessionLargestWin) {
+            sessionLargestWin = globalMe.largestWin;
+            changed = true;
+          }
+          if (globalMe.largestLoss > sessionLargestLoss) {
+            sessionLargestLoss = globalMe.largestLoss;
+            changed = true;
+          }
+          if (globalMe.balance !== balance) {
+            balance = globalMe.balance;
+            changed = true;
+          }
+          
+          if (changed) {
+            saveProgress();
+          }
         }
       }
     });
@@ -316,6 +337,11 @@
   $: if (user && user.mode !== 'guest') {
     // Auto-save balance changes for registered users
     saveProgress();
+  }
+
+  // Force sync local users on change to ensure Firestore is up to date
+  $: if (localUsers.length > 0) {
+    syncAllLocalUsers(localUsers).catch(err => console.error("Auto-sync failed", err));
   }
 
   function playChipSound(type = 'place') {
@@ -441,6 +467,7 @@
   let showLeaderboard = false;
   let showHelp = false;
   let isMuted = false;
+  let leaderboardLoading = false;
   let balance = 300.00; // Starting balance for new sessions
   let selectedChip = 5;
   let activeTab = 'hardways';
@@ -492,6 +519,41 @@
   let luckyRollerHits = new Set();
   let canPlaceLuckyRoller = true;
 
+  async function refreshLeaderboard() {
+    leaderboardLoading = true;
+    try {
+      const users = await fetchGlobalUsers();
+      allUsers = users;
+      
+      // If logged in, check if global data is more advanced for current user
+      if (user && user.mode !== 'guest') {
+        const globalMe = users.find(u => u.username.toLowerCase() === user.username.toLowerCase());
+        if (globalMe) {
+          // Sync current session state with global state if global is newer/higher
+          sessionHighestBalance = Math.max(sessionHighestBalance, globalMe.highestBalance || 0);
+          sessionLargestWin = Math.max(sessionLargestWin, globalMe.largestWin || 0);
+          sessionLargestLoss = Math.max(sessionLargestLoss, globalMe.largestLoss || 0);
+          
+          if (globalMe.balance !== balance) {
+             balance = globalMe.balance;
+          }
+          saveProgress();
+        }
+      }
+    } catch (error) {
+      console.error("App: Manual refresh failed", error);
+    } finally {
+      leaderboardLoading = false;
+    }
+  }
+
+  function toggleLeaderboard() {
+    showLeaderboard = !showLeaderboard;
+    if (showLeaderboard) {
+      refreshLeaderboard();
+    }
+  }
+
   // --- Win/Loss Display ---
   let showWinOverlay = false;
   let showLossOverlay = false;
@@ -523,6 +585,12 @@
     
     lastWinAmount = targetAmount;
     lastLossAmount = 0;
+
+    // Update session stats
+    if (targetAmount > sessionLargestWin) {
+      sessionLargestWin = targetAmount;
+    }
+
     // Reset and start count-up
     winAmountDisplay = 0;
     showWinOverlay = true;
@@ -566,6 +634,12 @@
     
     lastLossAmount = targetAmount;
     lastWinAmount = 0;
+
+    // Update session stats
+    if (targetAmount > sessionLargestLoss) {
+      sessionLargestLoss = targetAmount;
+    }
+
     // Reset and start count-up
     lossAmountDisplay = 0;
     showLossOverlay = true;
@@ -703,6 +777,15 @@
   // --- Logic ---
   let currentRoll = [1, 1];
   
+  // Track stats for persistence
+  let sessionHighestBalance = 300;
+  let sessionLargestWin = 0;
+  let sessionLargestLoss = 0;
+
+  $: if (balance > sessionHighestBalance) {
+    sessionHighestBalance = balance;
+  }
+
   onMount(() => {
     // Timer logic removed
   });
@@ -1478,8 +1561,8 @@
     bets = bets;
     if (winnings > 0) message = `WINNER! $${winnings.toFixed(2)}`;
 
-    // Save progress with roll stats
-    saveProgress({ win: winnings, loss: rollLoss });
+    // Save progress
+    saveProgress();
   }
 
   function handleRemoveBet(id, event) {
@@ -1638,9 +1721,11 @@
 
   {#if showLeaderboard}
     <Leaderboard 
-        users={displayUsers} 
-        on:close={() => showLeaderboard = false} 
-      />
+      users={displayUsers} 
+      loading={leaderboardLoading}
+      on:refresh={refreshLeaderboard}
+      on:close={() => showLeaderboard = false} 
+    />
   {/if}
 
   {#if showHelp}

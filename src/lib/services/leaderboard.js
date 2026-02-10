@@ -1,4 +1,4 @@
-import { db, auth } from './firebase';
+import { db, auth, isProd } from './firebase';
 import { 
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -29,8 +29,15 @@ const USERS_COLLECTION = 'users';
  */
 async function getDocWithFallback(docRef) {
   try {
+    // In production or when forced, try server first to avoid stale cache during login
+    if (isProd) {
+      try {
+        return await getDocFromServer(docRef);
+      } catch (e) {
+        console.warn("leaderboard: getDocFromServer failed, falling back to default", e);
+      }
+    }
     // Try getDoc directly - Firestore handles cache/server internally by default
-    // We only use specific server/cache calls if this fails
     return await getDoc(docRef);
   } catch (error) {
     console.warn("leaderboard: getDoc failed, trying cache explicitly", error);
@@ -136,6 +143,33 @@ export function subscribeToAuth(callback) {
       callback(null);
     }
   });
+}
+
+/**
+ * Fetches all users for the leaderboard once
+ * @returns {Promise<Array>} Array of users
+ */
+export async function fetchGlobalUsers() {
+  console.log('leaderboard: fetchGlobalUsers called');
+  const q = query(
+    collection(db, USERS_COLLECTION),
+    orderBy('balance', 'desc'),
+    limit(100)
+  );
+
+  try {
+    const querySnapshot = await getDocs(q);
+    const users = querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      lastUpdate: doc.data().lastUpdate?.toDate?.()?.toISOString() || new Date().toISOString()
+    }));
+    console.log(`leaderboard: fetched ${users.length} users`);
+    return users;
+  } catch (error) {
+    console.error("leaderboard: error fetching users:", error);
+    throw error;
+  }
 }
 
 /**
@@ -250,15 +284,4 @@ export async function syncAllLocalUsers(localUsers) {
     }
   }
   console.log("Local users sync check complete.");
-}
-
-// Keep legacy exports for compatibility during transition if needed
-export async function fetchGlobalUsers() {
-  const q = query(collection(db, USERS_COLLECTION), orderBy('balance', 'desc'));
-  const querySnapshot = await getDocs(q);
-  return querySnapshot.docs.map(doc => ({
-    id: doc.id,
-    ...doc.data(),
-    lastUpdate: doc.data().lastUpdate?.toDate?.()?.toISOString() || new Date().toISOString()
-  }));
 }
