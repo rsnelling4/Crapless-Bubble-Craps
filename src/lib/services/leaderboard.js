@@ -1,148 +1,231 @@
-// Global Leaderboard Service using npoint.io for simple shared state
-// This allows a "Global" leaderboard on a static site without a real backend.
+import { db, auth } from './firebase';
+import { 
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  updateProfile
+} from 'firebase/auth';
+import { 
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocs, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  limit,
+  serverTimestamp,
+  updateDoc
+} from 'firebase/firestore';
 
-const BIN_ID = '9f7d4c2b8a1e6d3f5a7c'; 
-const API_URL = `https://api.npoint.io/${BIN_ID}`;
+const USERS_COLLECTION = 'users';
 
-let isFetching = false;
-let lastFetchTime = 0;
-const FETCH_COOLDOWN = 2000; // 2s cooldown between any global operations
-
-export async function fetchGlobalUsers() {
-  if (isFetching) return null;
+/**
+ * Signs up a new user using Firebase Auth and creates a profile in Firestore
+ */
+export async function signupUser(username, password, nickname) {
+  // Use lowercase for email consistency, but keep original for document ID
+  const email = `${username.toLowerCase()}@craps.local`;
   
-  // Debounce rapid calls
-  const now = Date.now();
-  if (now - lastFetchTime < FETCH_COOLDOWN) return null;
-
-  isFetching = true;
   try {
-    const response = await fetch(API_URL);
-    if (!response.ok) {
-      if (response.status === 404 || response.status === 401) return [];
-      return []; 
-    }
-    const data = await response.json();
-    lastFetchTime = Date.now();
-    return Array.isArray(data.users) ? data.users : [];
-  } catch (error) {
-    // Completely silent for network/abort errors to keep console clean
-    return null;
-  } finally {
-    isFetching = false;
-  }
-}
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
 
-export async function updateGlobalUser(userStats) {
-  if (!userStats || userStats.username === 'Guest') return;
-  if (isFetching) return null;
+    // Update Firebase Auth profile
+    await updateProfile(user, { displayName: nickname });
 
-  isFetching = true;
-  try {
-    // 1. Get current
-    const response = await fetch(API_URL);
-    let users = [];
-    if (response.ok) {
-      const data = await response.json();
-      users = Array.isArray(data.users) ? data.users : [];
-    }
-
-    const userIdx = users.findIndex(u => u.username === userStats.username);
-    const sanitizedUser = {
-      username: userStats.username,
-      password: userStats.password, // Store password for later login
-      nickname: userStats.nickname || userStats.username,
-      balance: userStats.balance || 300,
-      highestBalance: userStats.highestBalance || 0,
-      largestWin: userStats.largestWin || 0,
-      largestLoss: userStats.largestLoss || 0,
-      resetCount: userStats.resetCount || 0,
-      lastUpdate: new Date().toISOString(),
-      isOnline: true
+    // Create Firestore document
+    const userData = {
+      username,
+      nickname,
+      balance: 300,
+      highestBalance: 300,
+      largestWin: 0,
+      largestLoss: 0,
+      resetCount: 0,
+      lastUpdate: serverTimestamp()
     };
 
-    if (userIdx !== -1) {
-      const existing = users[userIdx];
-      users[userIdx] = {
-        ...existing,
-        ...sanitizedUser,
-        highestBalance: Math.max(existing.highestBalance || 0, sanitizedUser.highestBalance),
-        largestWin: Math.max(existing.largestWin || 0, sanitizedUser.largestWin),
-      };
-    } else {
-      users.push(sanitizedUser);
-    }
-
-    // 2. Save
-    await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ users })
-    });
-
-    lastFetchTime = Date.now();
-    return users;
+    await setDoc(doc(db, USERS_COLLECTION, username), userData);
+    return { ...userData, uid: user.uid };
   } catch (error) {
-    return null;
-  } finally {
-    isFetching = false;
+    console.error("Signup error:", error);
+    throw error;
   }
 }
 
-export async function syncAllLocalUsers(localUsers) {
-  if (!localUsers || localUsers.length === 0 || isFetching) return;
-
-  isFetching = true;
+/**
+ * Logs in an existing user using Firebase Auth
+ */
+export async function loginUser(username, password) {
+  const email = `${username.toLowerCase()}@craps.local`;
   try {
-    const response = await fetch(API_URL);
-    let globalUsers = [];
-    if (response.ok) {
-      const data = await response.json();
-      globalUsers = Array.isArray(data.users) ? data.users : [];
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
+
+    // Fetch stats from Firestore
+    const userDoc = await getDoc(doc(db, USERS_COLLECTION, username));
+    if (userDoc.exists()) {
+      return { ...userDoc.data(), uid: user.uid };
+    } else {
+      // Fallback if doc doesn't exist yet
+      return { username, nickname: user.displayName || username, balance: 300, uid: user.uid };
     }
+  } catch (error) {
+    console.error("Login error:", error);
+    throw error;
+  }
+}
 
-    let changed = false;
-    localUsers.forEach(local => {
-      if (local.username === 'Guest') return;
-      const idx = globalUsers.findIndex(g => g.username === local.username);
-      const sanitizedLocal = {
-        username: local.username,
-        password: local.password, // Store password for later login
-        nickname: local.nickname || local.username,
-        balance: local.balance || 300,
-        highestBalance: local.highestBalance || 0,
-        largestWin: local.largestWin || 0,
-        largestLoss: local.largestLoss || 0,
-        resetCount: local.resetCount || 0,
-        lastUpdate: new Date().toISOString(),
-        isOnline: true
-      };
+/**
+ * Logs out the current user
+ */
+export async function logoutUser() {
+  return await signOut(auth);
+}
 
-      if (idx !== -1) {
-        const existing = globalUsers[idx];
-        if (sanitizedLocal.highestBalance > (existing.highestBalance || 0)) {
-          globalUsers[idx] = { ...existing, ...sanitizedLocal };
-          changed = true;
-        }
+/**
+ * Subscribes to auth state changes
+ */
+export function subscribeToAuth(callback) {
+  return onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      // User is signed in, fetch their Firestore data
+      // Note: We use the email prefix as username for now to match current logic
+      const username = user.email.split('@')[0];
+      const userDoc = await getDoc(doc(db, USERS_COLLECTION, username));
+      if (userDoc.exists()) {
+        callback({ ...userDoc.data(), uid: user.uid });
       } else {
-        globalUsers.push(sanitizedLocal);
-        changed = true;
+        callback({ username, nickname: user.displayName || username, balance: 300, uid: user.uid });
+      }
+    } else {
+      callback(null);
+    }
+  });
+}
+
+/**
+ * Subscribes to leaderboard updates in real-time
+ * @param {Function} callback - Function called with updated users array
+ * @returns {Function} Unsubscribe function
+ */
+export function subscribeToLeaderboard(callback) {
+  const q = query(
+    collection(db, USERS_COLLECTION),
+    orderBy('balance', 'desc')
+  );
+
+  let retryCount = 0;
+  const maxRetries = 3;
+
+  const createSnapshot = () => {
+    return onSnapshot(q, (snapshot) => {
+      retryCount = 0; // Reset retry count on successful sync
+      const users = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        // Convert Firestore timestamps to ISO strings for component compatibility
+        lastUpdate: doc.data().lastUpdate?.toDate?.()?.toISOString() || new Date().toISOString()
+      }));
+      console.log(`Leaderboard synced: ${users.length} users found.`);
+      callback(users);
+    }, (error) => {
+      console.error("Leaderboard subscription error:", error);
+      
+      // If it's a network/abort error, try to reconnect a few times
+      if (retryCount < maxRetries) {
+        retryCount++;
+        const delay = Math.pow(2, retryCount) * 1000;
+        console.warn(`Attempting to reconnect leaderboard (attempt ${retryCount}/${maxRetries}) in ${delay}ms...`);
+        setTimeout(createSnapshot, delay);
       }
     });
+  };
 
-    if (changed) {
-      await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ users: globalUsers })
-      });
-    }
-    
-    lastFetchTime = Date.now();
-    return globalUsers;
+  return createSnapshot();
+}
+
+/**
+ * Updates a single user's stats in Firestore
+ * @param {Object} userStats - User statistics to update
+ */
+export async function updateGlobalUser(userStats) {
+  if (!userStats || userStats.username === 'Guest') return;
+
+  const userRef = doc(db, USERS_COLLECTION, userStats.username);
+  
+  const sanitizedUser = {
+    username: userStats.username,
+    nickname: userStats.nickname || userStats.username,
+    balance: userStats.balance || 300,
+    highestBalance: userStats.highestBalance || 0,
+    largestWin: userStats.largestWin || 0,
+    largestLoss: userStats.largestLoss || 0,
+    resetCount: userStats.resetCount || 0,
+    lastUpdate: serverTimestamp()
+  };
+
+  try {
+    // Use setDoc with merge: true to create or update
+    await setDoc(userRef, sanitizedUser, { merge: true });
   } catch (error) {
-    return null;
-  } finally {
-    isFetching = false;
+    console.error("Error updating global user:", error);
   }
+}
+
+/**
+ * Syncs multiple local users to Firestore and creates Auth accounts if needed
+ * @param {Array} localUsers - Array of local user objects
+ */
+export async function syncAllLocalUsers(localUsers) {
+  if (!localUsers || localUsers.length === 0) return;
+
+  console.log(`Checking ${localUsers.length} local users for Firebase sync...`);
+  
+  for (const u of localUsers) {
+    if (u.username === 'Guest') continue;
+
+    try {
+      // 1. Check if Firestore doc exists
+      const userRef = doc(db, USERS_COLLECTION, u.username);
+      const userDoc = await getDoc(userRef);
+
+      if (!userDoc.exists()) {
+        console.log(`Migrating user ${u.username} to Firebase...`);
+        // 2. Create Auth account if password exists (dummy email)
+        if (u.password) {
+          try {
+            const email = `${u.username.toLowerCase()}@craps.local`;
+            await createUserWithEmailAndPassword(auth, email, u.password);
+            await updateProfile(auth.currentUser, { displayName: u.nickname || u.username });
+            console.log(`Auth account created for ${u.username}`);
+          } catch (authError) {
+            if (authError.code !== 'auth/email-already-in-use') {
+              console.warn(`Auth creation failed for ${u.username}:`, authError.message);
+            }
+          }
+        }
+        
+        // 3. Create Firestore doc
+        await updateGlobalUser(u);
+      }
+    } catch (error) {
+      console.error(`Error syncing user ${u.username}:`, error);
+    }
+  }
+  console.log("Local users sync check complete.");
+}
+
+// Keep legacy exports for compatibility during transition if needed
+export async function fetchGlobalUsers() {
+  const q = query(collection(db, USERS_COLLECTION), orderBy('balance', 'desc'));
+  const querySnapshot = await getDocs(q);
+  return querySnapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data(),
+    lastUpdate: doc.data().lastUpdate?.toDate?.()?.toISOString() || new Date().toISOString()
+  }));
 }

@@ -11,7 +11,16 @@
   import DiceBubble from './lib/components/DiceBubble.svelte';
   import Leaderboard from './lib/components/Leaderboard.svelte';
   import Help from './lib/components/Help.svelte';
-  import { fetchGlobalUsers, updateGlobalUser, syncAllLocalUsers } from './lib/services/leaderboard';
+  import { 
+    fetchGlobalUsers, 
+    updateGlobalUser, 
+    syncAllLocalUsers,
+    subscribeToLeaderboard,
+    signupUser,
+    loginUser,
+    logoutUser,
+    subscribeToAuth
+  } from './lib/services/leaderboard';
 
   $: sortedAllUsers = [...allUsers]
     .filter(u => u.username !== 'Guest')
@@ -113,66 +122,31 @@
     localStorage.setItem('bubble_craps_db', JSON.stringify(db));
   }
 
-  function handleSignup(event) {
+  async function handleSignup(event) {
     const { username, password, nickname } = event.detail;
-    const db = getDB();
     
-    // Check local and global users
-    if (db.users.find(u => u.username === username) || allUsers.find(u => u.username === username)) {
-      alert('Username already exists');
-      return;
-    }
-    const newUser = { 
-      username, 
-      password, 
-      nickname, 
-      balance: 300,
-      highestBalance: 300,
-      largestWin: 0,
-      largestLoss: 0,
-      resetCount: 0
-    };
-    db.users.push(newUser);
-    saveDB(db);
-    login(newUser);
-    
-    // Update global leaderboard
-    updateGlobalUser(newUser).then(updatedUsers => {
-      if (updatedUsers) allUsers = updatedUsers;
-    });
-  }
-
-  function handleLogin(event) {
-    const { username, password } = event.detail;
-    const db = getDB();
-    
-    // 1. Check local DB first
-    let foundUser = db.users.find(u => u.username === username && u.password === password);
-    
-    // 2. If not found locally, check global allUsers (synced from npoint)
-    if (!foundUser) {
-      const globalUser = allUsers.find(u => u.username === username && u.password === password);
-      if (globalUser) {
-        // Import global user to local DB
-        foundUser = {
-          ...globalUser,
-          balance: globalUser.balance || 300 // Fallback if balance not in global
-        };
-        db.users.push(foundUser);
-        saveDB(db);
+    try {
+      const newUser = await signupUser(username, password, nickname);
+      login(newUser);
+      message = "ACCOUNT CREATED SUCCESSFULLY";
+    } catch (error) {
+      if (error.code === 'auth/email-already-in-use') {
+        alert('Username already exists');
+      } else {
+        alert('Signup failed: ' + error.message);
       }
     }
+  }
 
-    if (foundUser) {
-      // Ensure existing users have stats fields
-      if (foundUser.balance === undefined) foundUser.balance = 300;
-      if (foundUser.highestBalance === undefined) foundUser.highestBalance = foundUser.balance;
-      if (foundUser.largestWin === undefined) foundUser.largestWin = 0;
-      if (foundUser.largestLoss === undefined) foundUser.largestLoss = 0;
-      if (foundUser.resetCount === undefined) foundUser.resetCount = 0;
-      login(foundUser);
-    } else {
-      alert('Invalid username or password');
+  async function handleLogin(event) {
+    const { username, password } = event.detail;
+    
+    try {
+      const userData = await loginUser(username, password);
+      login(userData);
+      message = "WELCOME BACK, " + userData.nickname.toUpperCase();
+    } catch (error) {
+      alert('Login failed: Invalid username or password');
     }
   }
 
@@ -205,9 +179,7 @@
 
     // Update global leaderboard on login
     if (userData.mode !== 'guest') {
-      updateGlobalUser(userData).then(updatedUsers => {
-        if (updatedUsers) allUsers = updatedUsers;
-      });
+      updateGlobalUser(userData);
     }
   }
 
@@ -215,11 +187,13 @@
     if (user && user.mode !== 'guest') {
       saveProgress();
     }
+    logoutUser();
     user = null;
     showAuth = true;
     localStorage.removeItem('bubble_craps_session');
   }
 
+  let globalUpdateTimeout;
   function saveProgress(rollStats = null) {
     if (!user || user.mode === 'guest') return;
     const db = getDB();
@@ -245,10 +219,11 @@
       // Update local user object too
       user = { ...db.users[userIdx], mode: 'user' };
       
-      // Update global leaderboard service
-      updateGlobalUser(user).then(updatedUsers => {
-        if (updatedUsers) allUsers = updatedUsers;
-      });
+      // Update global leaderboard service (debounced)
+      if (globalUpdateTimeout) clearTimeout(globalUpdateTimeout);
+      globalUpdateTimeout = setTimeout(() => {
+        updateGlobalUser(user);
+      }, 5000); // Wait 5s after last change before syncing globally
     }
   }
 
@@ -272,72 +247,64 @@
     showSettings = false;
   }
 
-  let leaderboardTimeout;
+  let unsubscribeLeaderboard;
+  let heartbeatInterval;
 
-  async function pollLeaderboard() {
-    try {
-      const users = await fetchGlobalUsers();
-      if (users) {
-        allUsers = users;
-      }
-    } catch (e) {
-      // Errors are silent
-    } finally {
-      leaderboardTimeout = setTimeout(pollLeaderboard, 15000); // 15s interval for stability
+  async function startLeaderboardSync() {
+    // 1. Initial sync of local users to Firebase
+    const dbLocal = getDB();
+    if (dbLocal.users.length > 0) {
+      await syncAllLocalUsers(dbLocal.users);
     }
+
+    // 2. Subscribe to real-time updates
+    unsubscribeLeaderboard = subscribeToLeaderboard((users) => {
+      allUsers = users;
+      
+      // If logged in, check if global data is more advanced
+      if (user && user.mode !== 'guest') {
+        const globalMe = users.find(u => u.username === user.username);
+        if (globalMe && (globalMe.highestBalance > user.highestBalance || globalMe.balance !== user.balance)) {
+          user.balance = globalMe.balance;
+          user.highestBalance = Math.max(user.highestBalance, globalMe.highestBalance);
+          saveProgress();
+        }
+      }
+    });
+
+    // 3. Start heartbeat for online status (every 30s)
+    heartbeatInterval = setInterval(() => {
+      if (user && user.mode !== 'guest') {
+        updateGlobalUser(user);
+      }
+    }, 30000);
   }
 
   onMount(async () => {
     loadSounds();
     
-    // Start polling after a small delay to let local DB load
+    // Start Firebase sync after a small delay
     setTimeout(async () => {
-      // 1. Initial sync
-      const db = getDB();
-      if (db.users.length > 0) {
-        const synced = await syncAllLocalUsers(db.users);
-        if (synced) allUsers = synced;
-      } else {
-        // Even if no local users, fetch global ones to enable login from other devices
-        const synced = await fetchGlobalUsers();
-        if (synced) allUsers = synced;
-      }
-      
-      // 2. Start regular polling
-      pollLeaderboard();
+      await startLeaderboardSync();
 
-      // 3. Check for existing session AFTER we have global users
-      const session = JSON.parse(localStorage.getItem('bubble_craps_session'));
-      if (session) {
-        if (session.mode === 'guest') {
-          // Force login prompt for guests on refresh by clearing session
-          localStorage.removeItem('bubble_craps_session');
-          showAuth = true;
-        } else {
-          // Check local DB first
-          let foundUser = db.users.find(u => u.username === session.username);
-          
-          // If not found locally, check global allUsers
-          if (!foundUser && allUsers.length > 0) {
-            const globalUser = allUsers.find(u => u.username === session.username);
-            if (globalUser) {
-              foundUser = {
-                ...globalUser,
-                balance: globalUser.balance || 300
-              };
-              db.users.push(foundUser);
-              saveDB(db);
-            }
-          }
-          
-          if (foundUser) login(foundUser);
+      // Subscribe to Auth state changes for session persistence
+      subscribeToAuth((userData) => {
+        if (userData && !user) {
+          login({ ...userData, mode: 'user' });
         }
+      });
+
+      const session = JSON.parse(localStorage.getItem('bubble_craps_session'));
+      if (session && session.mode === 'guest') {
+        localStorage.removeItem('bubble_craps_session');
+        showAuth = true;
       }
     }, 1000);
   });
 
   onDestroy(() => {
-    if (leaderboardTimeout) clearTimeout(leaderboardTimeout);
+    if (unsubscribeLeaderboard) unsubscribeLeaderboard();
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
   });
 
   $: if (user && user.mode !== 'guest') {

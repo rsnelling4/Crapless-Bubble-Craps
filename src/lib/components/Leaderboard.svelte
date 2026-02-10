@@ -6,10 +6,31 @@
 
   export let users = []; // Array of { username, nickname, highestBalance, largestWin, largestLoss, resetCount, isLocal, isYou }
 
+  // Helper to determine if a user is truly online (updated in the last 60 seconds)
+  function isUserOnline(lastUpdate) {
+    if (!lastUpdate) return false;
+    const updateTime = new Date(lastUpdate).getTime();
+    const now = Date.now();
+    return (now - updateTime) < 60000; // 60 seconds threshold
+  }
+
   // Sort users by highestBalance by default
   $: sortedUsers = [...users]
     .filter(u => u.username !== 'Guest')
-    .sort((a, b) => (b.highestBalance || 0) - (a.highestBalance || 0));
+    .sort((a, b) => {
+      // Primary sort by balance
+      const balanceDiff = (b.balance || 0) - (a.balance || 0);
+      if (balanceDiff !== 0) return balanceDiff;
+      
+      // Secondary sort by online status
+      const aOnline = isUserOnline(a.lastUpdate);
+      const bOnline = isUserOnline(b.lastUpdate);
+      if (aOnline && !bOnline) return -1;
+      if (!aOnline && bOnline) return 1;
+      
+      // Tertiary sort by highest balance
+      return (b.highestBalance || 0) - (a.highestBalance || 0);
+    });
 </script>
 
 <div class="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-xl animate-in fade-in duration-300">
@@ -46,9 +67,9 @@
           <tr class="bg-black/60 border-b border-white/10">
             <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest">Rank</th>
             <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest">Player</th>
-            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Highest Balance</th>
+            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Balance</th>
+            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Highest</th>
             <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Largest Win</th>
-            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Largest Loss</th>
             <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Resets</th>
           </tr>
         </thead>
@@ -77,18 +98,30 @@
                       {/if}
                     </span>
                     <div class="flex items-center gap-2 mt-0.5">
-                      {#if user.isLocal}
-                        <span class="flex items-center gap-1 text-[9px] font-bold text-zinc-500 uppercase tracking-tighter">
-                          <Home size={10} /> Local
+                      {#if isUserOnline(user.lastUpdate)}
+                        <span class="flex items-center gap-1 text-[9px] font-bold text-emerald-400 uppercase tracking-tighter">
+                          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          Online
+                        </span>
+                      {:else}
+                        <span class="flex items-center gap-1 text-[9px] font-bold text-zinc-600 uppercase tracking-tighter">
+                          <span class="w-1.5 h-1.5 rounded-full bg-zinc-700"></span>
+                          Offline
                         </span>
                       {/if}
-                      {#if !user.isLocal || user.lastUpdate}
-                        <span class="flex items-center gap-1 text-[9px] font-bold text-emerald-500/60 uppercase tracking-tighter">
-                          <Globe size={10} /> Online
+                      {#if user.isLocal}
+                        <span class="flex items-center gap-1 text-[9px] font-bold text-zinc-500 uppercase tracking-tighter ml-1">
+                          <Home size={10} /> Local
                         </span>
                       {/if}
                     </div>
                   </div>
+                </div>
+              </td>
+              <td class="px-6 py-4 text-right">
+                <div class="flex items-center justify-end gap-1 font-black text-white tabular-nums">
+                  <DollarSign size={14} class="text-emerald-400" />
+                  {(user.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </div>
               </td>
               <td class="px-6 py-4 text-right">
@@ -101,12 +134,6 @@
                 <div class="flex items-center justify-end gap-1 font-black text-yellow-400 tabular-nums">
                   <TrendingUp size={14} />
                   {(user.largestWin || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </div>
-              </td>
-              <td class="px-6 py-4 text-right">
-                <div class="flex items-center justify-end gap-1 font-black text-red-400 tabular-nums">
-                  <TrendingDown size={14} />
-                  {(user.largestLoss || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </div>
               </td>
               <td class="px-6 py-4 text-right">
