@@ -25,28 +25,17 @@ import {
 const USERS_COLLECTION = 'users';
 
 /**
- * Helper to fetch a document with fallback for offline/cache issues
+ * Helper to fetch a document using default Firestore behavior.
+ * We avoid explicit 'source' options (getDocFromServer/getDocFromCache)
+ * as they can cause "failed to get document from cache" errors.
  */
 async function getDocWithFallback(docRef) {
   try {
-    // In production or when forced, try server first to avoid stale cache during login
-    if (isProd) {
-      try {
-        return await getDocFromServer(docRef);
-      } catch (e) {
-        console.warn("leaderboard: getDocFromServer failed, falling back to default", e);
-      }
-    }
-    // Try getDoc directly - Firestore handles cache/server internally by default
+    // getDoc handles cache vs server internally.
     return await getDoc(docRef);
   } catch (error) {
-    console.warn("leaderboard: getDoc failed, trying cache explicitly", error);
-    try {
-      return await getDocFromCache(docRef);
-    } catch (cacheError) {
-      console.error("leaderboard: fatal doc fetch error", cacheError);
-      throw cacheError;
-    }
+    console.error("leaderboard: fatal doc fetch error", error);
+    throw error;
   }
 }
 

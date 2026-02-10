@@ -18,12 +18,10 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
 
-// Initialize Services with robust settings for development/preview environments
+// Initialize Services with robust settings
 export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true, // Re-enabled to support restrictive networks (e.g., proxies, firewalls)
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager()
-  })
+  experimentalForceLongPolling: true, 
+  // We use standard persistence without complex tab management to reduce errors
 });
 
 export const auth = getAuth(app);
