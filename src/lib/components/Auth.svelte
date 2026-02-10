@@ -135,7 +135,11 @@
         <div class="flex items-center justify-between px-2">
           <button
             type="button"
-            on:click={() => { mode = mode === 'login' ? 'signup' : 'login'; error = ''; }}
+            on:click={() => { 
+              mode = mode === 'login' ? 'signup' : 'login'; 
+              error = ''; 
+              dispatch('toggleMode');
+            }}
             disabled={loading}
             class="text-xs font-black text-zinc-400 hover:text-white uppercase tracking-tighter transition-colors disabled:opacity-50"
           >

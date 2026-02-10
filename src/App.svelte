@@ -134,7 +134,7 @@
       message = "ACCOUNT CREATED SUCCESSFULLY";
     } catch (error) {
       console.error('App: Signup failed error:', error);
-      authError = error.message || 'Signup failed';
+      authError = getFriendlyAuthError(error);
       showAuth = true; 
     }
   }
@@ -151,7 +151,7 @@
       message = "WELCOME BACK, " + (userData.nickname || userData.username).toUpperCase();
     } catch (error) {
       console.error('App: Login failed error:', error);
-      authError = error.message || 'Invalid username or password';
+      authError = getFriendlyAuthError(error);
       showAuth = true;
     }
   }
@@ -463,6 +463,29 @@
   let allUsers = []; // Shared global users for leaderboard
   let showAuth = true;
   let authError = '';
+
+  function getFriendlyAuthError(error) {
+    const code = error.code || '';
+    const message = error.message || '';
+    
+    if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || message.includes('invalid-credential')) {
+      return 'Invalid username or password. Please try again.';
+    }
+    if (code === 'auth/email-already-in-use') {
+      return 'This username is already taken. Please choose another.';
+    }
+    if (code === 'auth/network-request-failed') {
+      return 'Network error. Please check your internet connection and try again.';
+    }
+    if (code === 'auth/weak-password') {
+      return 'Password is too weak. Please use at least 6 characters.';
+    }
+    if (code === 'auth/too-many-requests') {
+      return 'Too many failed attempts. Please try again later.';
+    }
+    
+    return message || 'An unexpected error occurred. Please try again.';
+  }
   let showSettings = false;
   let showLeaderboard = false;
   let showHelp = false;
@@ -545,6 +568,10 @@
     } finally {
       leaderboardLoading = false;
     }
+  }
+
+  function toggleAuthMode() {
+    authError = '';
   }
 
   function toggleLeaderboard() {
@@ -1629,6 +1656,7 @@
       on:login={handleLogin} 
       on:signup={handleSignup} 
       on:guest={handleGuest} 
+      on:toggleMode={toggleAuthMode}
       errorMessage={authError}
     />
   {/if}
