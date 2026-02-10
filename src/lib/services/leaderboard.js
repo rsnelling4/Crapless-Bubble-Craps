@@ -11,6 +11,8 @@ import {
   doc, 
   setDoc, 
   getDoc, 
+  getDocFromCache,
+  getDocFromServer,
   getDocs, 
   onSnapshot, 
   query, 
@@ -21,6 +23,25 @@ import {
 } from 'firebase/firestore';
 
 const USERS_COLLECTION = 'users';
+
+/**
+ * Helper to fetch a document with fallback for offline/cache issues
+ */
+async function getDocWithFallback(docRef) {
+  try {
+    // Try getDoc directly - Firestore handles cache/server internally by default
+    // We only use specific server/cache calls if this fails
+    return await getDoc(docRef);
+  } catch (error) {
+    console.warn("leaderboard: getDoc failed, trying cache explicitly", error);
+    try {
+      return await getDocFromCache(docRef);
+    } catch (cacheError) {
+      console.error("leaderboard: fatal doc fetch error", cacheError);
+      throw cacheError;
+    }
+  }
+}
 
 /**
  * Signs up a new user using Firebase Auth and creates a profile in Firestore
@@ -73,7 +94,7 @@ export async function loginUser(username, password) {
 
     // Fetch stats from Firestore
     console.log('leaderboard: fetching firestore doc', lowerUsername);
-    const userDoc = await getDoc(doc(db, USERS_COLLECTION, lowerUsername));
+    const userDoc = await getDocWithFallback(doc(db, USERS_COLLECTION, lowerUsername));
     if (userDoc.exists()) {
       console.log('leaderboard: firestore doc found');
       return { ...userDoc.data(), uid: user.uid };
@@ -104,7 +125,7 @@ export function subscribeToAuth(callback) {
       // User is signed in, fetch their Firestore data
       const lowerUsername = user.email.split('@')[0];
       console.log('leaderboard: auth state change - logged in', lowerUsername);
-      const userDoc = await getDoc(doc(db, USERS_COLLECTION, lowerUsername));
+      const userDoc = await getDocWithFallback(doc(db, USERS_COLLECTION, lowerUsername));
       if (userDoc.exists()) {
         callback({ ...userDoc.data(), uid: user.uid });
       } else {

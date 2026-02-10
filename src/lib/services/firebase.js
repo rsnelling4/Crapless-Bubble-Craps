@@ -20,7 +20,10 @@ const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
 
 // Initialize Services with robust settings for development/preview environments
 export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true, // Fixes net::ERR_ABORTED in many proxy/preview environments
+  // experimentalForceLongPolling: true, // Removed as it can cause slowdowns in some environments
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager()
+  })
 });
 
 export const auth = getAuth(app);
