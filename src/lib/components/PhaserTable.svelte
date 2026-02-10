@@ -6,6 +6,14 @@
   let game;
   let chipGroup;
   let balanceTarget = { x: 0, y: 0 };
+  let handleResize;
+  let winAnimationDuration = 1500; // Default base duration
+
+  export function setWinAnimationDuration(ms) {
+    // We want the chips to finish traveling by the time the sound ends.
+    // Since we add some randomness, we'll use this as the base.
+    winAnimationDuration = ms;
+  }
 
   export function triggerWinAnimation(chipPositions) {
     if (!game || !game.scene.scenes[0]) return;
@@ -17,11 +25,15 @@
         const chip = scene.add.circle(pos.x, pos.y, 10, 0x9eff00, 0.8);
         scene.physics.add.existing(chip);
         
+        // Randomize duration slightly around the target duration
+        // We subtract a bit (200ms) to ensure they all arrive before the sound finishes
+        const duration = Math.max(800, winAnimationDuration - 400 + Math.random() * 400);
+
         scene.tweens.add({
           targets: chip,
           x: balanceTarget.x,
           y: balanceTarget.y,
-          duration: 1500 + Math.random() * 1000,
+          duration: duration,
           ease: 'Cubic.easeOut',
           onComplete: () => chip.destroy()
         });
@@ -121,14 +133,16 @@
     }
 
     // Handle resize
-    window.addEventListener('resize', () => {
-      if (game) {
+    handleResize = () => {
+      if (game && game.scale) {
         game.scale.resize(window.innerWidth, window.innerHeight);
       }
-    });
+    };
+    window.addEventListener('resize', handleResize);
   });
 
   onDestroy(() => {
+    window.removeEventListener('resize', handleResize);
     if (game) {
       game.destroy(true);
     }

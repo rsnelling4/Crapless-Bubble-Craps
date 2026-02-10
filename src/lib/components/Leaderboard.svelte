@@ -7,6 +7,18 @@
   export let users = []; // Array of { username, nickname, highestBalance, largestWin, largestLoss, resetCount, isLocal, isYou }
   export let loading = false;
 
+  let sortBy = 'balance';
+  let sortDirection = -1; // -1 for desc, 1 for asc
+
+  function toggleSort(field) {
+    if (sortBy === field) {
+      sortDirection *= -1;
+    } else {
+      sortBy = field;
+      sortDirection = -1;
+    }
+  }
+
   // Helper to determine if a user is truly online (updated in the last 60 seconds)
   function isUserOnline(lastUpdate) {
     if (!lastUpdate) return false;
@@ -15,13 +27,15 @@
     return (now - updateTime) < 60000; // 60 seconds threshold
   }
 
-  // Sort users by highestBalance by default
+  // Sort users
   $: sortedUsers = [...users]
     .filter(u => u.username !== 'Guest')
     .sort((a, b) => {
-      // Primary sort by balance
-      const balanceDiff = (b.balance || 0) - (a.balance || 0);
-      if (balanceDiff !== 0) return balanceDiff;
+      // Primary sort by selected field
+      const valA = a[sortBy] || 0;
+      const valB = b[sortBy] || 0;
+      const diff = (valB - valA) * (sortDirection === -1 ? 1 : -1);
+      if (diff !== 0) return diff;
       
       // Secondary sort by online status
       const aOnline = isUserOnline(a.lastUpdate);
@@ -29,8 +43,8 @@
       if (aOnline && !bOnline) return -1;
       if (!aOnline && bOnline) return 1;
       
-      // Tertiary sort by highest balance
-      return (b.highestBalance || 0) - (a.highestBalance || 0);
+      // Tertiary sort by balance
+      return (b.balance || 0) - (a.balance || 0);
     });
 </script>
 
@@ -43,7 +57,7 @@
           <Trophy size={32} />
         </div>
         <div>
-          <h2 class="text-3xl font-black text-white tracking-tighter uppercase italic leading-none">Global <span class="text-emerald-400">Leaderboard</span></h2>
+          <h2 class="text-3xl font-black text-white tracking-tighter uppercase italic leading-none">Player <span class="text-emerald-400">Leaderboard</span></h2>
           <div class="flex items-center gap-2 mt-1">
             <span class="flex h-2 w-2 relative">
               <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -79,11 +93,36 @@
           <tr class="bg-black/60 border-b border-white/10">
             <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest">Rank</th>
             <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest">Player</th>
-            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Balance</th>
-            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Highest</th>
-            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Win</th>
-            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Loss</th>
-            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Resets</th>
+            <th 
+              class="px-6 py-4 text-[10px] font-black {sortBy === 'balance' ? 'text-emerald-400' : 'text-zinc-500'} uppercase tracking-widest text-right cursor-pointer hover:text-emerald-300 transition-colors"
+              on:click={() => toggleSort('balance')}
+            >
+              Balance {sortBy === 'balance' ? (sortDirection === -1 ? '↓' : '↑') : ''}
+            </th>
+            <th 
+              class="px-6 py-4 text-[10px] font-black {sortBy === 'highestBalance' ? 'text-emerald-400' : 'text-zinc-500'} uppercase tracking-widest text-right cursor-pointer hover:text-emerald-300 transition-colors"
+              on:click={() => toggleSort('highestBalance')}
+            >
+              Highest {sortBy === 'highestBalance' ? (sortDirection === -1 ? '↓' : '↑') : ''}
+            </th>
+            <th 
+              class="px-6 py-4 text-[10px] font-black {sortBy === 'largestWin' ? 'text-emerald-400' : 'text-zinc-500'} uppercase tracking-widest text-right cursor-pointer hover:text-emerald-300 transition-colors"
+              on:click={() => toggleSort('largestWin')}
+            >
+              Win {sortBy === 'largestWin' ? (sortDirection === -1 ? '↓' : '↑') : ''}
+            </th>
+            <th 
+              class="px-6 py-4 text-[10px] font-black {sortBy === 'largestLoss' ? 'text-emerald-400' : 'text-zinc-500'} uppercase tracking-widest text-right cursor-pointer hover:text-emerald-300 transition-colors"
+              on:click={() => toggleSort('largestLoss')}
+            >
+              Loss {sortBy === 'largestLoss' ? (sortDirection === -1 ? '↓' : '↑') : ''}
+            </th>
+            <th 
+              class="px-6 py-4 text-[10px] font-black {sortBy === 'resetCount' ? 'text-emerald-400' : 'text-zinc-500'} uppercase tracking-widest text-right cursor-pointer hover:text-emerald-300 transition-colors"
+              on:click={() => toggleSort('resetCount')}
+            >
+              Resets {sortBy === 'resetCount' ? (sortDirection === -1 ? '↓' : '↑') : ''}
+            </th>
           </tr>
         </thead>
         <tbody class="divide-y divide-white/5">
@@ -120,11 +159,6 @@
                         <span class="flex items-center gap-1 text-[9px] font-bold text-zinc-600 uppercase tracking-tighter">
                           <span class="w-1.5 h-1.5 rounded-full bg-zinc-700"></span>
                           Offline
-                        </span>
-                      {/if}
-                      {#if user.isLocal}
-                        <span class="flex items-center gap-1 text-[9px] font-bold text-zinc-500 uppercase tracking-tighter ml-1">
-                          <Home size={10} /> Local
                         </span>
                       {/if}
                     </div>

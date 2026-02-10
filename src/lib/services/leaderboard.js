@@ -1,372 +1,342 @@
-import { db, auth, isProd } from './firebase';
-import { 
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  updateProfile
-} from 'firebase/auth';
-import { 
-  collection, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  getDocs, 
-  onSnapshot, 
-  query, 
-  orderBy, 
-  limit,
-  serverTimestamp,
-  updateDoc
-} from 'firebase/firestore';
+import { playfabService } from './playfab';
 
-const USERS_COLLECTION = 'users';
+const SESSION_KEY = 'bubble_craps_session';
+let authSubscribers = [];
+let leaderboardSubscribers = [];
+let currentUser = null;
+let currentLeaderboard = [];
+let isUpdatingStats = false;
+let pendingStatsUpdate = null;
 
-/**
- * Helper to fetch a document using default Firestore behavior.
- * We avoid explicit 'source' options (getDocFromServer/getDocFromCache)
- * as they can cause "failed to get document from cache" errors.
- */
-async function getDocWithFallback(docRef) {
-  try {
-    // getDoc handles cache vs server internally.
-    return await getDoc(docRef);
-  } catch (error) {
-    console.error("leaderboard: fatal doc fetch error", error);
-    throw error;
+function saveLocalSession(session) {
+  if (typeof window === 'undefined') return;
+  if (session) {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } else {
+    localStorage.removeItem(SESSION_KEY);
   }
 }
 
+function notifyAuthSubscribers(user) {
+  currentUser = user;
+  authSubscribers.forEach(cb => cb(user));
+}
+
+function notifyLeaderboardSubscribers(users) {
+  currentLeaderboard = users;
+  leaderboardSubscribers.forEach(cb => cb(users));
+}
+
 /**
- * Signs up a new user using Firebase Auth and creates a profile in Firestore
+ * Basic Signup/Login using PlayFab
  */
 export async function signupUser(username, password, nickname) {
-  console.log('leaderboard: signupUser called', { username, nickname });
+  console.log('Leaderboard Bridge: signupUser', { username });
   
   if (!username || username.length < 3) {
-    throw new Error('Username must be at least 3 characters long');
+    throw { code: 'auth/error', message: 'Username must be at least 3 characters long' };
   }
-  
-  const lowerUsername = username.toLowerCase();
-  const email = `${lowerUsername}@craps.local`;
-  
+  if (!password || password.length < 6) {
+    throw { code: 'auth/error', message: 'Password must be at least 6 characters long' };
+  }
+
   try {
-    // 1. Check if username document already exists in Firestore
-    // This is the first line of defense for unique usernames
-    const userRef = doc(db, USERS_COLLECTION, lowerUsername);
-    const existingDoc = await getDoc(userRef);
+    // First register the user
+    const registerResult = await playfabService.register(username, password);
     
-    if (existingDoc.exists()) {
-      throw { code: 'auth/email-already-in-use', message: 'This username is already taken.' };
-    }
-
-    // 2. Create Firebase Auth account
-    let userCredential;
-    try {
-      userCredential = await createUserWithEmailAndPassword(auth, email, password);
-    } catch (authError) {
-      console.error('leaderboard: auth creation failed', authError);
-      // Map common errors to friendly ones if needed
-      if (authError.code === 'auth/email-already-in-use') {
-        throw { code: 'auth/email-already-in-use', message: 'This username is already taken.' };
+    // Then update display name if provided
+    if (nickname) {
+      try {
+        await playfabService.updateDisplayName(nickname);
+      } catch (nameError) {
+        console.warn("Failed to set display name:", nameError);
       }
-      throw authError;
     }
 
-    const user = userCredential.user;
-    console.log('leaderboard: auth user created', user.uid);
-
-    // 3. Update Firebase Auth profile
-    await updateProfile(user, { displayName: nickname });
-
-    // 4. Create Firestore document
     const userData = {
-      username, // Keep original casing for display
-      nickname,
+      username,
+      nickname: nickname || username,
+      uid: registerResult.PlayFabId,
       balance: 300,
       highestBalance: 300,
       largestWin: 0,
       largestLoss: 0,
       resetCount: 0,
-      lastUpdate: serverTimestamp()
+      mode: 'user'
     };
 
-    console.log('leaderboard: setting firestore doc', lowerUsername);
-    await setDoc(userRef, userData);
+    saveLocalSession({ username, mode: 'user', uid: userData.uid });
+    notifyAuthSubscribers(userData);
     
-    return { ...userData, uid: user.uid };
+    // Initialize statistics for new user
+    await updateGlobalUser(userData);
+    
+    return userData;
   } catch (error) {
-    console.error("leaderboard: signup error:", error);
-    throw error;
+    console.error("Signup Bridge Error:", error);
+    const msg = error.errorMessage || error.message || 'Signup failed';
+    throw { code: 'auth/error', message: msg };
   }
 }
 
-/**
- * Logs in an existing user using Firebase Auth
- */
 export async function loginUser(username, password) {
-  console.log('leaderboard: loginUser called', username);
-  const lowerUsername = username.toLowerCase();
-  const email = `${lowerUsername}@craps.local`;
+  console.log('Leaderboard Bridge: loginUser', { username });
   
-  try {
-    const userCredential = await signInWithEmailAndPassword(auth, email, password);
-    const user = userCredential.user;
-    console.log('leaderboard: auth login successful', user.uid);
+  if (!username || !password) {
+    throw new Error('Username and password are required');
+  }
 
-    // Fetch stats from Firestore
-    console.log('leaderboard: fetching firestore doc', lowerUsername);
-    const userRef = doc(db, USERS_COLLECTION, lowerUsername);
-    const userDoc = await getDoc(userRef);
+  try {
+    console.log("Leaderboard Bridge: Starting login for", username);
+    const loginResult = await playfabService.login(username, password);
     
-    if (userDoc.exists()) {
-      console.log('leaderboard: firestore doc found');
-      const data = userDoc.data();
-      return { ...data, uid: user.uid };
-    } else {
-      console.log('leaderboard: firestore doc NOT found, creating auto-repair profile');
-      // If Auth exists but Firestore doc is missing, auto-create it
-      const userData = {
-        username: username, // Fallback to provided username
-        nickname: user.displayName || username,
-        balance: 300,
-        highestBalance: 300,
-        largestWin: 0,
-        largestLoss: 0,
-        resetCount: 0,
-        lastUpdate: serverTimestamp()
-      };
-      await setDoc(userRef, userData);
-      return { ...userData, uid: user.uid };
+    if (!loginResult) {
+      throw new Error("Login succeeded but no data was returned from PlayFab");
     }
+
+    console.log("Leaderboard Bridge: Login raw result keys:", Object.keys(loginResult));
+    const payload = loginResult.InfoResultPayload;
+    if (!payload) {
+      console.warn("Leaderboard Bridge: InfoResultPayload is missing in login result!");
+    }
+
+    const profile = payload?.PlayerProfile;
+    const statistics = payload?.PlayerStatistics || [];
+    
+    console.log("Leaderboard Bridge: Raw statistics found:", statistics.length, statistics);
+
+    const getStat = (name) => {
+      // Try exact match first, then case-insensitive match
+      let stat = statistics.find(s => s.StatisticName === name || s.Name === name);
+      if (!stat) {
+        stat = statistics.find(s => (s.StatisticName || s.Name || "").toLowerCase() === name.toLowerCase());
+      }
+      
+      if (stat) {
+        console.log(`Leaderboard Bridge: Found stat ${name} = ${stat.Value}`);
+        return stat.Value;
+      }
+      console.log(`Leaderboard Bridge: Stat ${name} not found in PlayFab profile`);
+      return null;
+    };
+
+    const userData = {
+      username,
+      nickname: profile?.DisplayName || username,
+      uid: loginResult.PlayFabId,
+      balance: getStat('Balance') ?? 300,
+      highestBalance: getStat('highestBalance') ?? (getStat('Balance') ?? 300),
+      largestWin: getStat('largestWin') ?? 0,
+      largestLoss: getStat('largestLoss') ?? 0,
+      resetCount: getStat('resetCount') ?? 0,
+      mode: 'user'
+    };
+
+    console.log("Leaderboard Bridge: User data constructed:", userData);
+    
+    saveLocalSession({ username, mode: 'user', uid: userData.uid });
+    notifyAuthSubscribers(userData);
+    
+    fetchGlobalUsers().catch(err => console.error("Initial leaderboard fetch failed:", err));
+    
+    return userData;
   } catch (error) {
-    console.error("leaderboard: login error:", error);
-    throw error;
+    console.error("Login Bridge Error:", error);
+    const msg = error.errorMessage || error.message || 'Login failed';
+    throw { code: 'auth/error', message: msg };
   }
 }
 
-/**
- * Logs out the current user
- */
 export async function logoutUser() {
-  return await signOut(auth);
+  saveLocalSession(null);
+  notifyAuthSubscribers(null);
+}
+
+export function subscribeToAuth(callback) {
+  authSubscribers.push(callback);
+  
+  if (typeof window !== 'undefined') {
+    const sessionStr = localStorage.getItem(SESSION_KEY);
+    if (sessionStr && !currentUser) {
+      // Don't auto-signup/login with password because we don't have it.
+      // Instead, we just notify that we are not logged in.
+      // The UI will show the login screen.
+      setTimeout(() => callback(null), 0);
+    } else {
+      setTimeout(() => callback(currentUser), 0);
+    }
+  }
+
+  return () => {
+    authSubscribers = authSubscribers.filter(cb => cb !== callback);
+  };
 }
 
 /**
- * Subscribes to auth state changes
+ * Fetch global users for the leaderboard (using multiple statistics)
  */
-let currentUserUnsubscribe = null;
-
-/**
- * Subscribes to Auth state changes and real-time user document updates.
- * Returns an unsubscribe function that cleans up both Auth and Firestore listeners.
- */
-export function subscribeToAuth(callback) {
-  const authUnsubscribe = onAuthStateChanged(auth, async (user) => {
-    // Clean up existing Firestore listener if any
-    if (currentUserUnsubscribe) {
-      currentUserUnsubscribe();
-      currentUserUnsubscribe = null;
+export async function fetchGlobalUsers() {
+  try {
+    // Ensure we are authenticated with PlayFab before fetching
+    if (!playfabService.isLoggedIn()) {
+      console.log("Auth Bridge: Not logged in, performing silent login for leaderboard access");
+      await playfabService.loginSilent();
     }
 
-    if (user) {
-      const lowerUsername = user.email.split('@')[0];
-      console.log('leaderboard: auth state change - logged in', lowerUsername);
-      const userRef = doc(db, USERS_COLLECTION, lowerUsername);
+    const statNames = ['Balance', 'highestBalance', 'largestWin', 'largestLoss', 'resetCount'];
+    console.log(`Auth Bridge: Fetching leaderboards for: ${statNames.join(', ')}`);
 
-      // Start real-time listener for the user's document
-      currentUserUnsubscribe = onSnapshot(userRef, async (snapshot) => {
-        if (snapshot.exists()) {
-          console.log('leaderboard: user data updated in real-time');
-          callback({ ...snapshot.data(), uid: user.uid });
-        } else {
-          console.warn('leaderboard: auth session found but no firestore doc. Attempting auto-repair.');
-          try {
-            const userData = {
-              username: lowerUsername,
-              nickname: user.displayName || lowerUsername,
-              balance: 300,
-              highestBalance: 300,
+    // Fetch all leaderboards in parallel
+    const results = await Promise.allSettled(
+      statNames.map(name => playfabService.getLeaderboard(name, 10))
+    );
+
+    const userMap = new Map();
+
+    results.forEach((result, index) => {
+      const statName = statNames[index];
+      if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+        result.value.forEach(entry => {
+          const uid = entry.PlayFabId;
+          const profile = entry.Profile || entry.PlayerProfile;
+          const profileStats = profile?.Statistics || [];
+
+          if (!userMap.has(uid)) {
+            userMap.set(uid, {
+              uid: uid,
+              username: entry.DisplayName || uid,
+              nickname: entry.DisplayName || uid,
+              balance: 0,
+              highestBalance: 0,
               largestWin: 0,
               largestLoss: 0,
               resetCount: 0,
-              lastUpdate: serverTimestamp()
-            };
-            await setDoc(userRef, userData);
-            // The onSnapshot listener will trigger again once setDoc completes
-          } catch (error) {
-            console.error('leaderboard: auto-repair failed:', error);
-            // Fallback to avoid hanging
-            callback({ 
-              username: lowerUsername, 
-              nickname: user.displayName || lowerUsername, 
-              balance: 300, 
-              uid: user.uid 
+              lastUpdate: profile?.LastLogin || new Date().toISOString()
             });
           }
-        }
-      }, (error) => {
-        console.error('leaderboard: onSnapshot error:', error);
-        // On fatal listener error, try a one-time fetch as fallback
-        getDoc(userRef).then(docSnap => {
-          if (docSnap.exists()) {
-            callback({ ...docSnap.data(), uid: user.uid });
-          }
-        }).catch(e => console.error('leaderboard: snapshot fallback failed:', e));
-      });
-    } else {
-      console.log('leaderboard: auth state change - logged out');
-      callback(null);
-    }
-  });
 
-  // Return a combined unsubscribe function
-  return () => {
-    authUnsubscribe();
-    if (currentUserUnsubscribe) {
-      currentUserUnsubscribe();
-      currentUserUnsubscribe = null;
-    }
-  };
-}
+          const user = userMap.get(uid);
+          
+          // Update the specific stat for this leaderboard
+          if (statName === 'Balance') user.balance = entry.StatValue;
+          else if (statName === 'highestBalance') user.highestBalance = entry.StatValue;
+          else if (statName === 'largestWin') user.largestWin = entry.StatValue;
+          else if (statName === 'largestLoss') user.largestLoss = entry.StatValue;
+          else if (statName === 'resetCount') user.resetCount = entry.StatValue;
 
-/**
- * Fetches all users for the leaderboard once
- * @returns {Promise<Array>} Array of users
- */
-export async function fetchGlobalUsers() {
-  console.log('leaderboard: fetchGlobalUsers called');
-  const q = query(
-    collection(db, USERS_COLLECTION),
-    orderBy('balance', 'desc'),
-    limit(100)
-  );
-
-  try {
-    const querySnapshot = await getDocs(q);
-    const users = querySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-      lastUpdate: doc.data().lastUpdate?.toDate?.()?.toISOString() || new Date().toISOString()
-    }));
-    console.log(`leaderboard: fetched ${users.length} users`);
-    return users;
-  } catch (error) {
-    console.error("leaderboard: error fetching users:", error);
-    throw error;
-  }
-}
-
-/**
- * Subscribes to leaderboard updates in real-time
- * @param {Function} callback - Function called with updated users array
- * @returns {Function} Unsubscribe function
- */
-export function subscribeToLeaderboard(callback) {
-  const q = query(
-    collection(db, USERS_COLLECTION),
-    orderBy('balance', 'desc')
-  );
-
-  let retryCount = 0;
-  const maxRetries = 3;
-
-  const createSnapshot = () => {
-    return onSnapshot(q, (snapshot) => {
-      retryCount = 0; // Reset retry count on successful sync
-      const users = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        // Convert Firestore timestamps to ISO strings for component compatibility
-        lastUpdate: doc.data().lastUpdate?.toDate?.()?.toISOString() || new Date().toISOString()
-      }));
-      console.log(`Leaderboard synced: ${users.length} users found.`);
-      callback(users);
-    }, (error) => {
-      console.error("Leaderboard subscription error:", error);
-      
-      // If it's a network/abort error, try to reconnect a few times
-      if (retryCount < maxRetries) {
-        retryCount++;
-        const delay = Math.pow(2, retryCount) * 1000;
-        console.warn(`Attempting to reconnect leaderboard (attempt ${retryCount}/${maxRetries}) in ${delay}ms...`);
-        setTimeout(createSnapshot, delay);
+          // Also supplement with any other stats found in the profile
+          profileStats.forEach(s => {
+            const name = s.Name || s.StatisticName;
+            const val = s.Value;
+            if (name === 'Balance') user.balance = val;
+            else if (name === 'highestBalance') user.highestBalance = val;
+            else if (name === 'largestWin') user.largestWin = val;
+            else if (name === 'largestLoss') user.largestLoss = val;
+            else if (name === 'resetCount') user.resetCount = val;
+          });
+        });
+      } else if (result.status === 'rejected') {
+        console.warn(`Auth Bridge: Failed to fetch leaderboard for ${statName}:`, result.reason);
       }
     });
-  };
 
-  return createSnapshot();
-}
+    const formattedUsers = Array.from(userMap.values());
+    console.log(`Auth Bridge: Unified ${formattedUsers.length} unique leaderboard entries`);
 
-/**
- * Updates a single user's stats in Firestore
- * @param {Object} userStats - User statistics to update
- */
-export async function updateGlobalUser(userStats) {
-  if (!userStats || userStats.username === 'Guest') return;
-
-  const lowerUsername = userStats.username.toLowerCase();
-  const userRef = doc(db, USERS_COLLECTION, lowerUsername);
-  
-  const sanitizedUser = {
-    username: userStats.username,
-    nickname: userStats.nickname || userStats.username,
-    balance: userStats.balance || 300,
-    highestBalance: userStats.highestBalance || 0,
-    largestWin: userStats.largestWin || 0,
-    largestLoss: userStats.largestLoss || 0,
-    resetCount: userStats.resetCount || 0,
-    lastUpdate: serverTimestamp()
-  };
-
-  try {
-    // Use setDoc with merge: true to create or update
-    await setDoc(userRef, sanitizedUser, { merge: true });
+    notifyLeaderboardSubscribers(formattedUsers);
+    return formattedUsers;
   } catch (error) {
-    console.error("Error updating global user:", error);
+    console.error("Failed to fetch global users:", error);
+    return currentLeaderboard;
   }
 }
 
 /**
- * Syncs multiple local users to Firestore and creates Auth accounts if needed
- * @param {Array} localUsers - Array of local user objects
+ * Subscribe to leaderboard updates
  */
-export async function syncAllLocalUsers(localUsers) {
-  if (!localUsers || localUsers.length === 0) return;
-
-  console.log(`Checking ${localUsers.length} local users for Firebase sync...`);
+export function subscribeToLeaderboard(callback) {
+  leaderboardSubscribers.push(callback);
+  // Send current data immediately
+  setTimeout(() => callback(currentLeaderboard), 0);
   
-  for (const u of localUsers) {
-    if (u.username === 'Guest') continue;
+  return () => {
+    leaderboardSubscribers = leaderboardSubscribers.filter(cb => cb !== callback);
+  };
+}
 
-    try {
-      const lowerUsername = u.username.toLowerCase();
-      // 1. Check if Firestore doc exists
-      const userRef = doc(db, USERS_COLLECTION, lowerUsername);
-      const userDoc = await getDoc(userRef);
+/**
+ * Update global user statistics in PlayFab with conflict prevention
+ */
+export async function updateGlobalUser(userData) {
+  if (!userData || userData.mode === 'guest') return;
 
-      if (!userDoc.exists()) {
-        console.log(`Migrating user ${u.username} to Firebase...`);
-        // 2. Create Auth account if password exists (dummy email)
-        if (u.password) {
-          try {
-            const email = `${lowerUsername}@craps.local`;
-            await createUserWithEmailAndPassword(auth, email, u.password);
-            await updateProfile(auth.currentUser, { displayName: u.nickname || u.username });
-            console.log(`Auth account created for ${u.username}`);
-          } catch (authError) {
-            if (authError.code !== 'auth/email-already-in-use') {
-              console.warn(`Auth creation failed for ${u.username}:`, authError.message);
-            }
-          }
-        }
-        
-        // 3. Create Firestore doc
-        await updateGlobalUser(u);
-      }
-    } catch (error) {
-      console.error(`Error syncing user ${u.username}:`, error);
-    }
+  const stats = {
+    Balance: userData.balance ?? 0,
+    highestBalance: userData.highestBalance ?? 0,
+    largestLoss: userData.largestLoss ?? 0,
+    largestWin: userData.largestWin ?? 0,
+    resetCount: userData.resetCount ?? 0
+  };
+
+  // If already updating, queue this one and return a promise that will resolve
+  // when the current update (and any subsequent queued updates) finish.
+  if (isUpdatingStats) {
+    console.log("Leaderboard Bridge: Stat update already in progress, queuing latest stats");
+    pendingStatsUpdate = stats;
+    // We return a promise that will resolve eventually, but for now we just return
+    return;
   }
-  console.log("Local users sync check complete.");
+
+  isUpdatingStats = true;
+
+  const performUpdate = async (statsToUse) => {
+    try {
+      console.log("Leaderboard Bridge: Pushing stats to PlayFab:", statsToUse);
+      await playfabService.updateStatistics(statsToUse);
+      // Refresh leaderboard after update
+      await fetchGlobalUsers();
+      console.log("Leaderboard Bridge: Stat update successful");
+    } catch (error) {
+      // If it's a conflict (409), we'll let the next queued update handle it
+      if (error.code === 409) {
+        console.warn("PlayFab Stat Update Conflict (409) - a newer update will follow.");
+      } else {
+        console.error("Failed to update global user statistics:", error);
+      }
+    } finally {
+      // Check if a new update came in while we were processing
+      if (pendingStatsUpdate) {
+        console.log("Leaderboard Bridge: Processing queued stats update");
+        const nextStats = { ...pendingStatsUpdate };
+        pendingStatsUpdate = null;
+        // Continue the chain
+        await performUpdate(nextStats);
+      } else {
+        isUpdatingStats = false;
+        console.log("Leaderboard Bridge: All stat updates complete");
+      }
+    }
+  };
+
+  return await performUpdate(stats);
+}
+
+/**
+ * Wait for any pending stat updates to complete
+ */
+export async function waitForPendingUpdates() {
+  if (!isUpdatingStats) return;
+  
+  console.log("Leaderboard Bridge: Waiting for pending updates to finish...");
+  return new Promise(resolve => {
+    const check = () => {
+      if (!isUpdatingStats) {
+        console.log("Leaderboard Bridge: Pending updates finished.");
+        resolve();
+      } else {
+        setTimeout(check, 100);
+      }
+    };
+    check();
+  });
 }

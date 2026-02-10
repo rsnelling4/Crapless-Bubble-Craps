@@ -25,11 +25,19 @@
         error = 'All fields are required for signup';
         return;
       }
+      if (password.length < 6) {
+        error = 'Password must be at least 6 characters';
+        return;
+      }
       loading = true;
       dispatch('signup', { username, password, nickname });
     } else if (mode === 'login') {
       if (!username || !password) {
         error = 'Username and password are required';
+        return;
+      }
+      if (password.length < 6) {
+        error = 'Password must be at least 6 characters';
         return;
       }
       console.log('Dispatching login event', { username, password });

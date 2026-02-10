@@ -14,44 +14,21 @@
   import { 
     fetchGlobalUsers, 
     updateGlobalUser, 
-    syncAllLocalUsers,
-    subscribeToLeaderboard,
     signupUser,
     loginUser,
     logoutUser,
-    subscribeToAuth
+    subscribeToAuth,
+    waitForPendingUpdates,
+    subscribeToLeaderboard
   } from './lib/services/leaderboard';
 
-  $: sortedAllUsers = [...allUsers]
+  $: displayUsers = [...allUsers]
     .filter(u => u.username !== 'Guest')
-    .sort((a, b) => (b.highestBalance || 0) - (a.highestBalance || 0));
-
-  $: localUsers = getDB().users.filter(u => u.username !== 'Guest');
-
-  // Merged view for the UI, ensuring local updates are reflected instantly
-  $: displayUsers = (() => {
-    const merged = [...allUsers];
-    localUsers.forEach(local => {
-      const idx = merged.findIndex(m => m.username.toLowerCase() === local.username.toLowerCase());
-      if (idx !== -1) {
-        // If it's the current user, prioritize their current live balance
-        const isCurrentUser = user && local.username.toLowerCase() === user.username.toLowerCase();
-        const currentBalance = isCurrentUser ? balance : local.balance;
-        
-        merged[idx] = {
-          ...merged[idx],
-          ...local,
-          balance: currentBalance,
-          highestBalance: Math.max(merged[idx].highestBalance || 0, local.highestBalance || 0, currentBalance),
-          isLocal: true,
-          isYou: isCurrentUser
-        };
-      } else {
-        merged.push({ ...local, isLocal: true, isYou: user && local.username.toLowerCase() === user.username.toLowerCase() });
-      }
-    });
-    return merged;
-  })();
+    .map(u => ({
+      ...u,
+      isYou: user && u.username.toLowerCase() === user.username.toLowerCase()
+    }))
+    .sort((a, b) => (b.balance || 0) - (a.balance || 0));
 
   // --- Audio ---
   const audioContext = typeof window !== 'undefined' ? new (window.AudioContext || window.webkitAudioContext)() : null;
@@ -114,14 +91,6 @@
   }
 
   // --- Auth & Persistence ---
-  function getDB() {
-    return JSON.parse(localStorage.getItem('bubble_craps_db') || '{"users":[]}');
-  }
-
-  function saveDB(db) {
-    localStorage.setItem('bubble_craps_db', JSON.stringify(db));
-  }
-
   async function handleSignup(event) {
     const { username, password, nickname } = event.detail;
     console.log('App: handleSignup triggered for', username);
@@ -170,14 +139,23 @@
   }
 
   function login(userData) {
-    user = userData;
-    balance = userData.balance;
-    showAuth = false;
+    console.log('App: login called with full data:', JSON.stringify(userData, null, 2));
     
-    // Initialize session stats with user's current record
-    sessionHighestBalance = userData.highestBalance || userData.balance;
-    sessionLargestWin = userData.largestWin || 0;
-    sessionLargestLoss = userData.largestLoss || 0;
+    // Initialize balance and session stats BEFORE setting user
+    // to ensure reactive blocks (like saveProgress) use the restored values
+    balance = Number(userData.balance ?? 300);
+    sessionHighestBalance = Number(userData.highestBalance ?? balance);
+    sessionLargestWin = Number(userData.largestWin ?? 0);
+    sessionLargestLoss = Number(userData.largestLoss ?? 0);
+    
+    console.log('App: Restoration results:', {
+      restoredBalance: balance,
+      restoredHighest: sessionHighestBalance,
+      sourceBalance: userData.balance
+    });
+
+    user = userData;
+    showAuth = false;
     
     // Reset hardway counters for new sessions/players
     hardwayCounters = { 4: 0, 6: 0, 8: 0, 10: 0 };
@@ -188,45 +166,64 @@
       mode: userData.mode || 'user'
     }));
 
-    // Update global leaderboard on login
+    // Update leaderboard on login (ensures local state matches global)
     if (userData.mode !== 'guest') {
+      console.log('App: Triggering post-login sync');
       updateGlobalUser(userData);
     }
   }
 
-  function logout() {
+  async function logout() {
+    console.log('App: logout initiated');
     if (user && user.mode !== 'guest') {
-      saveProgress();
+      // 1. Trigger immediate save
+      await saveProgress(true);
+      // 2. Wait for any queued updates to finish
+      await waitForPendingUpdates();
     }
     logoutUser();
     user = null;
     showAuth = true;
     localStorage.removeItem('bubble_craps_session');
+    console.log('App: logout complete');
   }
 
-  let globalUpdateTimeout;
-  function saveProgress() {
+  let updateTimeout;
+  async function saveProgress(immediate = false) {
     if (!user || user.mode === 'guest') return;
-    const db = getDB();
-    const userIdx = db.users.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
-    if (userIdx !== -1) {
-      db.users[userIdx].balance = balance;
-      
-      // Update stats using session trackers
-      db.users[userIdx].highestBalance = Math.max(db.users[userIdx].highestBalance || 0, sessionHighestBalance);
-      db.users[userIdx].largestWin = Math.max(db.users[userIdx].largestWin || 0, sessionLargestWin);
-      db.users[userIdx].largestLoss = Math.max(db.users[userIdx].largestLoss || 0, sessionLargestLoss);
-      
-      saveDB(db);
-      // Update local user object too
-      user = { ...db.users[userIdx], mode: 'user' };
-      
-      // Update global leaderboard service (debounced)
-      if (globalUpdateTimeout) clearTimeout(globalUpdateTimeout);
-      globalUpdateTimeout = setTimeout(() => {
-        updateGlobalUser(user);
-      }, 5000); // Wait 5s after last change before syncing globally
+    
+    // Update local user object with latest session stats
+    const updatedUser = {
+      ...user,
+      balance: Number(balance), // Ensure it's a number
+      highestBalance: Math.max(Number(user.highestBalance || 0), Number(sessionHighestBalance)),
+      largestWin: Math.max(Number(user.largestWin || 0), Number(sessionLargestWin)),
+      largestLoss: Math.max(Number(user.largestLoss || 0), Number(sessionLargestLoss))
+    };
+    
+    // Only update if something actually changed to avoid unnecessary re-renders/syncs
+    const hasChanged = JSON.stringify(user) !== JSON.stringify(updatedUser);
+    
+    if (hasChanged) {
+      console.log('App: local user state updated', {
+        oldBalance: user.balance,
+        newBalance: updatedUser.balance
+      });
+      user = updatedUser;
     }
+    
+    if (immediate) {
+      if (updateTimeout) clearTimeout(updateTimeout);
+      console.log('App: pushing immediate update to PlayFab');
+      return await updateGlobalUser(user);
+    }
+
+    // Update leaderboard service (debounced for frequent changes)
+    if (updateTimeout) clearTimeout(updateTimeout);
+    updateTimeout = setTimeout(async () => {
+      console.log('App: pushing debounced update to PlayFab');
+      await updateGlobalUser(user);
+    }, 2000); 
   }
 
   function resetBalance() {
@@ -239,17 +236,12 @@
     sessionLargestLoss = 0;
 
     if (user.mode !== 'guest') {
-      const db = getDB();
-      const userIdx = db.users.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
-      if (userIdx !== -1) {
-        db.users[userIdx].resetCount = (db.users[userIdx].resetCount || 0) + 1;
-        db.users[userIdx].balance = 300;
-        saveDB(db);
-        user = { ...db.users[userIdx], mode: 'user' };
-      }
-    } else {
-      user.resetCount = (user.resetCount || 0) + 1;
-      user.balance = 300;
+      user = {
+        ...user,
+        balance: 300,
+        resetCount: (user.resetCount || 0) + 1
+      };
+      saveProgress(true); // Immediate sync on reset
     }
     message = "BALANCE RESET TO $300";
     showSettings = false;
@@ -260,58 +252,16 @@
   let heartbeatInterval;
 
   async function startLeaderboardSync() {
-    // 1. Initial sync of local users to Firebase
-    const dbLocal = getDB();
-    if (dbLocal.users.length > 0) {
-      await syncAllLocalUsers(dbLocal.users);
-    }
-
-    // 2. Subscribe to real-time updates
+    // Subscribe to real-time updates
     unsubscribeLeaderboard = subscribeToLeaderboard((users) => {
       allUsers = users;
-      
-      // If logged in, check if global data is more advanced
-      if (user && user.mode !== 'guest') {
-        const globalMe = users.find(u => u.username.toLowerCase() === user.username.toLowerCase());
-        if (globalMe) {
-          // Update session stats if global data is more advanced
-          let changed = false;
-          if (globalMe.highestBalance > sessionHighestBalance) {
-            sessionHighestBalance = globalMe.highestBalance;
-            changed = true;
-          }
-          if (globalMe.largestWin > sessionLargestWin) {
-            sessionLargestWin = globalMe.largestWin;
-            changed = true;
-          }
-          if (globalMe.largestLoss > sessionLargestLoss) {
-            sessionLargestLoss = globalMe.largestLoss;
-            changed = true;
-          }
-          if (globalMe.balance !== balance) {
-            balance = globalMe.balance;
-            changed = true;
-          }
-          
-          if (changed) {
-            saveProgress();
-          }
-        }
-      }
     });
-
-    // 3. Start heartbeat for online status (every 30s)
-    heartbeatInterval = setInterval(() => {
-      if (user && user.mode !== 'guest') {
-        updateGlobalUser(user);
-      }
-    }, 30000);
   }
 
   onMount(async () => {
     loadSounds();
     
-    // Start Firebase sync after a small delay
+    // Start local sync after a small delay
     setTimeout(async () => {
       await startLeaderboardSync();
 
@@ -333,17 +283,17 @@
   onDestroy(() => {
     if (unsubscribeLeaderboard) unsubscribeLeaderboard();
     if (unsubscribeAuth) unsubscribeAuth();
-    if (heartbeatInterval) clearInterval(heartbeatInterval);
   });
 
-  $: if (user && user.mode !== 'guest') {
-    // Auto-save balance changes for registered users
-    saveProgress();
+  $: if (balance > sessionHighestBalance) {
+    sessionHighestBalance = balance;
   }
 
-  // Force sync local users on change to ensure Firestore is up to date
-  $: if (localUsers.length > 0) {
-    syncAllLocalUsers(localUsers).catch(err => console.error("Auto-sync failed", err));
+  $: if (user && user.mode !== 'guest') {
+    // Ensure every balance change or session stat change triggers a save
+    // Adding these variables here makes the block reactive to them
+    [balance, sessionHighestBalance, sessionLargestWin, sessionLargestLoss];
+    saveProgress();
   }
 
   function playChipSound(type = 'place') {
@@ -462,7 +412,7 @@
 
   // --- State ---
   let user = null; // { username, nickname, mode: 'user' | 'guest', highestBalance, largestWin, largestLoss, resetCount }
-  let allUsers = []; // Shared global users for leaderboard
+  let allUsers = []; // Shared users for leaderboard
   let showAuth = true;
   let authError = '';
 
@@ -619,6 +569,9 @@
     if (targetAmount > sessionLargestWin) {
       sessionLargestWin = targetAmount;
     }
+    
+    // Explicitly call saveProgress immediately to ensure real-time sync
+    saveProgress(true);
 
     // Reset and start count-up
     winAmountDisplay = 0;
@@ -631,6 +584,12 @@
 
     const soundDuration = winSoundBuffer ? winSoundBuffer.duration * 1000 : 4500;
     const duration = soundDuration * 0.95; // Count up over 95% of the sound duration (slowed down from 80%)
+    
+    // Sync Phaser chip animation duration with sound duration
+    if (phaserTableRef && typeof phaserTableRef.setWinAnimationDuration === 'function') {
+      phaserTableRef.setWinAnimationDuration(soundDuration);
+    }
+    
     const steps = 60;
     const increment = targetAmount / steps;
     let current = 0;
@@ -668,6 +627,9 @@
     if (targetAmount > sessionLargestLoss) {
       sessionLargestLoss = targetAmount;
     }
+    
+    // Explicitly call saveProgress immediately to ensure real-time sync
+    saveProgress(true);
 
     // Reset and start count-up
     lossAmountDisplay = 0;
@@ -1538,48 +1500,32 @@
           return null;
         };
 
-        const totalLoss = losingBets.reduce((sum, id) => sum + (currentBets[id] || 0), 0);
+        const winPositions = winningBets.map(getPos).filter(p => p !== null);
+        const lossPositions = losingBets.map(getPos).filter(p => p !== null);
 
-        if (total === 7) {
-          // On a Seven Out, trigger loss animations for everything losing
-          const lossPositions = losingBets.map(getPos).filter(p => p !== null);
-          if (lossPositions.length > 0) {
-            phaserTableRef.triggerLossAnimation(lossPositions);
-            if (totalLoss > 0) {
-              playChipSound('7out');
-              triggerLossOverlay(totalLoss);
-            }
-          }
-          
-          // Trigger win animations for all winners (Any 7, Pass Line on come-out)
-          if (winningBets.length > 0) {
-            const winPositions = winningBets.map(getPos).filter(p => p !== null);
-            if (winPositions.length > 0) {
-              phaserTableRef.triggerWinAnimation(winPositions);
-              playChipSound('win');
-              triggerWinOverlay(winnings);
-            }
-          }
-        } else {
-          if (winningBets.length > 0) {
-            const winPositions = winningBets.map(getPos).filter(p => p !== null);
-            if (winPositions.length > 0) {
-              phaserTableRef.triggerWinAnimation(winPositions);
-              playChipSound('win');
-              triggerWinOverlay(winnings);
-            }
-          }
+        // Always trigger phaser animations (they can run in parallel silently)
+        if (winPositions.length > 0) phaserTableRef.triggerWinAnimation(winPositions);
+        if (lossPositions.length > 0) phaserTableRef.triggerLossAnimation(lossPositions);
 
-          if (losingBets.length > 0) {
-            const lossPositions = losingBets.map(getPos).filter(p => p !== null);
-            if (lossPositions.length > 0) {
-              phaserTableRef.triggerLossAnimation(lossPositions);
-              if (totalLoss > 0) {
-                playChipSound('loss');
-                triggerLossOverlay(totalLoss);
-              }
-            }
+        // Determine sound and overlay based on net result
+        if (rollProfit > rollLoss) {
+          // Net Win: play win sound and show win overlay
+          if (winnings > 0) {
+            playChipSound('win');
+            triggerWinOverlay(winnings);
           }
+        } else if (rollLoss > rollProfit) {
+          // Net Loss: play appropriate loss sound and show loss overlay
+          playChipSound(total === 7 ? '7out' : 'loss');
+          triggerLossOverlay(rollLoss);
+        } else if (rollLoss > 0) {
+          // Wash (rollProfit == rollLoss) - default to loss feedback if there was any loss
+          playChipSound(total === 7 ? '7out' : 'loss');
+          triggerLossOverlay(rollLoss);
+        } else if (winningBets.length > 0) {
+          // Special case: winning but maybe no profit (unlikely with Craps but for safety)
+          playChipSound('win');
+          triggerWinOverlay(winnings);
         }
       }
     } catch (e) {
@@ -1590,8 +1536,8 @@
     bets = bets;
     if (winnings > 0) message = `WINNER! $${winnings.toFixed(2)}`;
 
-    // Save progress
-    saveProgress();
+    // Save progress immediately for roll results to ensure real-time leaderboard
+    saveProgress(true);
   }
 
   function handleRemoveBet(id, event) {
@@ -1700,6 +1646,7 @@
             </div>
             <button 
               on:click={() => isMuted = !isMuted}
+              aria-label={isMuted ? 'Unmute' : 'Mute'}
               class="w-12 h-6 rounded-full transition-colors relative {isMuted ? 'bg-red-500/40' : 'bg-emerald-500/40'} border border-white/10"
             >
               <div class="absolute top-1 w-4 h-4 rounded-full bg-white shadow-lg transition-all {isMuted ? 'left-1' : 'left-7'}"></div>

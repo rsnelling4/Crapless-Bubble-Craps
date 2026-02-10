@@ -512,11 +512,26 @@
   }
 </script>
 
-<div class="w-[14%] bg-black/20 rounded-2xl border-2 border-emerald-400/50 shadow-[0_0_40px_rgba(0,0,0,0.6),inset_0_0_30px_rgba(0,0,0,0.4)] flex flex-col overflow-hidden relative group" on:click|self={() => dispatch('close')}>
+<div 
+  class="w-[14%] bg-black/20 rounded-2xl border-2 border-emerald-400/50 shadow-[0_0_40px_rgba(0,0,0,0.6),inset_0_0_30px_rgba(0,0,0,0.4)] flex flex-col overflow-hidden relative group" 
+  on:click|self={() => dispatch('close')}
+  on:keydown={(e) => e.key === 'Escape' && dispatch('close')}
+  role="button"
+  tabindex="0"
+  aria-label="Dice Bubble Container"
+>
   <!-- Header Removed -->
 
   <!-- 3D Canvas -->
-  <div bind:this={container} class="flex-1 relative cursor-pointer" on:click={roll}>
+  <div 
+    bind:this={container} 
+    class="flex-1 relative cursor-pointer" 
+    on:click={roll}
+    on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && roll()}
+    role="button"
+    tabindex="0"
+    aria-label="Roll Dice"
+  >
   </div>
 </div>
 
@@ -524,8 +539,5 @@
   @keyframes eclipse-rays {
     from { transform: rotate(0deg) scale(1); }
     to { transform: rotate(360deg) scale(1.1); }
-  }
-  .animate-eclipse-rays {
-    animation: eclipse-rays 10s linear infinite;
   }
 </style>
