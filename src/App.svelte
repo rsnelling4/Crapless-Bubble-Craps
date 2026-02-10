@@ -32,10 +32,10 @@
   $: displayUsers = (() => {
     const merged = [...allUsers];
     localUsers.forEach(local => {
-      const idx = merged.findIndex(m => m.username === local.username);
+      const idx = merged.findIndex(m => m.username.toLowerCase() === local.username.toLowerCase());
       if (idx !== -1) {
         // If it's the current user, prioritize their current live balance
-        const isCurrentUser = user && local.username === user.username;
+        const isCurrentUser = user && local.username.toLowerCase() === user.username.toLowerCase();
         const currentBalance = isCurrentUser ? balance : local.balance;
         
         merged[idx] = {
@@ -47,7 +47,7 @@
           isYou: isCurrentUser
         };
       } else {
-        merged.push({ ...local, isLocal: true, isYou: user && local.username === user.username });
+        merged.push({ ...local, isLocal: true, isYou: user && local.username.toLowerCase() === user.username.toLowerCase() });
       }
     });
     return merged;
@@ -124,29 +124,35 @@
 
   async function handleSignup(event) {
     const { username, password, nickname } = event.detail;
+    console.log('App: handleSignup triggered for', username);
+    authError = ''; // Clear previous error
     
     try {
       const newUser = await signupUser(username, password, nickname);
+      console.log('App: signupUser successful', newUser);
       login(newUser);
       message = "ACCOUNT CREATED SUCCESSFULLY";
     } catch (error) {
-      if (error.code === 'auth/email-already-in-use') {
-        alert('Username already exists');
-      } else {
-        alert('Signup failed: ' + error.message);
-      }
+      console.error('App: Signup failed error:', error);
+      authError = error.message || 'Signup failed';
+      showAuth = true; 
     }
   }
 
   async function handleLogin(event) {
     const { username, password } = event.detail;
+    console.log('App: handleLogin triggered for', username);
+    authError = ''; // Clear previous error
     
     try {
       const userData = await loginUser(username, password);
+      console.log('App: loginUser successful', userData);
       login(userData);
-      message = "WELCOME BACK, " + userData.nickname.toUpperCase();
+      message = "WELCOME BACK, " + (userData.nickname || userData.username).toUpperCase();
     } catch (error) {
-      alert('Login failed: Invalid username or password');
+      console.error('App: Login failed error:', error);
+      authError = error.message || 'Invalid username or password';
+      showAuth = true;
     }
   }
 
@@ -197,7 +203,7 @@
   function saveProgress(rollStats = null) {
     if (!user || user.mode === 'guest') return;
     const db = getDB();
-    const userIdx = db.users.findIndex(u => u.username === user.username);
+    const userIdx = db.users.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
     if (userIdx !== -1) {
       db.users[userIdx].balance = balance;
       
@@ -232,7 +238,7 @@
     balance = 300;
     if (user.mode !== 'guest') {
       const db = getDB();
-      const userIdx = db.users.findIndex(u => u.username === user.username);
+      const userIdx = db.users.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
       if (userIdx !== -1) {
         db.users[userIdx].resetCount = (db.users[userIdx].resetCount || 0) + 1;
         db.users[userIdx].balance = 300;
@@ -263,7 +269,7 @@
       
       // If logged in, check if global data is more advanced
       if (user && user.mode !== 'guest') {
-        const globalMe = users.find(u => u.username === user.username);
+        const globalMe = users.find(u => u.username.toLowerCase() === user.username.toLowerCase());
         if (globalMe && (globalMe.highestBalance > user.highestBalance || globalMe.balance !== user.balance)) {
           user.balance = globalMe.balance;
           user.highestBalance = Math.max(user.highestBalance, globalMe.highestBalance);
@@ -430,6 +436,7 @@
   let user = null; // { username, nickname, mode: 'user' | 'guest', highestBalance, largestWin, largestLoss, resetCount }
   let allUsers = []; // Shared global users for leaderboard
   let showAuth = true;
+  let authError = '';
   let showSettings = false;
   let showLeaderboard = false;
   let showHelp = false;
@@ -1539,6 +1546,7 @@
       on:login={handleLogin} 
       on:signup={handleSignup} 
       on:guest={handleGuest} 
+      errorMessage={authError}
     />
   {/if}
 

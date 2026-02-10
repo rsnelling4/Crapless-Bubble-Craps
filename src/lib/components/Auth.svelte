@@ -4,29 +4,45 @@
 
   const dispatch = createEventDispatcher();
 
+  export let errorMessage = '';
   let mode = 'login'; // 'login', 'signup', 'guest'
   let username = '';
   let password = '';
   let nickname = '';
   let error = '';
+  let loading = false;
+
+  $: if (errorMessage) {
+    error = errorMessage;
+    loading = false;
+  }
 
   function handleAuth() {
+    error = '';
+    console.log('handleAuth triggered', { mode, username, password, nickname });
     if (mode === 'signup') {
       if (!username || !password || !nickname) {
         error = 'All fields are required for signup';
         return;
       }
+      loading = true;
       dispatch('signup', { username, password, nickname });
     } else if (mode === 'login') {
       if (!username || !password) {
         error = 'Username and password are required';
         return;
       }
+      console.log('Dispatching login event', { username, password });
+      loading = true;
       dispatch('login', { username, password });
     }
   }
 
+  // Clear loading if error changes (likely from parent alert or internal)
+  $: if (error) loading = false;
+
   function handleGuest() {
+    console.log('handleGuest triggered');
     dispatch('guest');
   }
 </script>
@@ -50,7 +66,7 @@
     </div>
 
     <!-- Auth Form -->
-    <div class="space-y-4 relative z-10">
+    <form on:submit|preventDefault={handleAuth} class="space-y-4 relative z-10">
       {#if mode !== 'guest'}
         <div class="space-y-4">
           <!-- Username -->
@@ -60,9 +76,10 @@
               type="text"
               bind:value={username}
               placeholder="Username"
-              class="w-full bg-black/40 border border-white/10 rounded-xl py-3.5 pl-12 pr-4 text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500/50 transition-colors shadow-inner"
+              disabled={loading}
+              class="w-full bg-black/40 border border-white/10 rounded-xl py-3.5 pl-12 pr-4 text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500/50 transition-colors shadow-inner disabled:opacity-50"
             />
-            <p class="text-[9px] text-zinc-500 mt-1 ml-2 uppercase font-bold tracking-tighter">Note: Usernames are case sensitive</p>
+            <p class="text-[9px] text-zinc-500 mt-1 ml-2 uppercase font-bold tracking-tighter">Note: Usernames are case insensitive</p>
           </div>
 
           <!-- Password -->
@@ -72,7 +89,8 @@
               type="password"
               bind:value={password}
               placeholder="Password"
-              class="w-full bg-black/40 border border-white/10 rounded-xl py-3.5 pl-12 pr-4 text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500/50 transition-colors shadow-inner"
+              disabled={loading}
+              class="w-full bg-black/40 border border-white/10 rounded-xl py-3.5 pl-12 pr-4 text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500/50 transition-colors shadow-inner disabled:opacity-50"
             />
           </div>
 
@@ -84,7 +102,8 @@
                 type="text"
                 bind:value={nickname}
                 placeholder="Display Nickname"
-                class="w-full bg-black/40 border border-white/10 rounded-xl py-3.5 pl-12 pr-4 text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500/50 transition-colors shadow-inner"
+                disabled={loading}
+                class="w-full bg-black/40 border border-white/10 rounded-xl py-3.5 pl-12 pr-4 text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500/50 transition-colors shadow-inner disabled:opacity-50"
               />
             </div>
           {/if}
@@ -96,27 +115,37 @@
 
         <!-- Action Button -->
         <button
-          on:click={handleAuth}
-          class="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-emerald-500/20 active:scale-[0.98] flex items-center justify-center gap-2"
+          type="submit"
+          disabled={loading}
+          class="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-emerald-500/20 active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {#if mode === 'login'}
-            <LogIn size={20} /> Sign In
+          {#if loading}
+            <div class="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin"></div>
+            Processing...
           {:else}
-            <UserPlus size={20} /> Create Account
+            {#if mode === 'login'}
+              <LogIn size={20} /> Sign In
+            {:else}
+              <UserPlus size={20} /> Create Account
+            {/if}
           {/if}
         </button>
 
         <!-- Toggle Mode -->
         <div class="flex items-center justify-between px-2">
           <button
+            type="button"
             on:click={() => { mode = mode === 'login' ? 'signup' : 'login'; error = ''; }}
-            class="text-xs font-black text-zinc-400 hover:text-white uppercase tracking-tighter transition-colors"
+            disabled={loading}
+            class="text-xs font-black text-zinc-400 hover:text-white uppercase tracking-tighter transition-colors disabled:opacity-50"
           >
             {mode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
           </button>
           <button
+            type="button"
             on:click={() => mode = 'guest'}
-            class="text-xs font-black text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter transition-colors"
+            disabled={loading}
+            class="text-xs font-black text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter transition-colors disabled:opacity-50"
           >
             Play as Guest
           </button>
@@ -128,12 +157,14 @@
             Guest progress is <span class="text-red-400">not saved</span>. Create an account to track your bankroll and shooter stats across sessions!
           </p>
           <button
+            type="button"
             on:click={handleGuest}
             class="w-full py-4 bg-white hover:bg-zinc-200 text-black font-black uppercase tracking-widest rounded-xl transition-all shadow-lg active:scale-[0.98] flex items-center justify-center gap-2"
           >
             <Play size={20} fill="currentColor" /> Start Guest Session
           </button>
           <button
+            type="button"
             on:click={() => mode = 'login'}
             class="text-xs font-black text-zinc-400 hover:text-white uppercase tracking-tighter transition-colors"
           >
@@ -141,7 +172,7 @@
           </button>
         </div>
       {/if}
-    </div>
+    </form>
   </div>
 </div>
 

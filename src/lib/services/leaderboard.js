@@ -26,19 +26,21 @@ const USERS_COLLECTION = 'users';
  * Signs up a new user using Firebase Auth and creates a profile in Firestore
  */
 export async function signupUser(username, password, nickname) {
-  // Use lowercase for email consistency, but keep original for document ID
-  const email = `${username.toLowerCase()}@craps.local`;
+  console.log('leaderboard: signupUser called', { username, nickname });
+  const lowerUsername = username.toLowerCase();
+  const email = `${lowerUsername}@craps.local`;
   
   try {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
+    console.log('leaderboard: auth user created', user.uid);
 
     // Update Firebase Auth profile
     await updateProfile(user, { displayName: nickname });
 
     // Create Firestore document
     const userData = {
-      username,
+      username, // Keep original casing for display
       nickname,
       balance: 300,
       highestBalance: 300,
@@ -48,10 +50,11 @@ export async function signupUser(username, password, nickname) {
       lastUpdate: serverTimestamp()
     };
 
-    await setDoc(doc(db, USERS_COLLECTION, username), userData);
+    console.log('leaderboard: setting firestore doc', lowerUsername);
+    await setDoc(doc(db, USERS_COLLECTION, lowerUsername), userData);
     return { ...userData, uid: user.uid };
   } catch (error) {
-    console.error("Signup error:", error);
+    console.error("leaderboard: signup error:", error);
     throw error;
   }
 }
@@ -60,21 +63,27 @@ export async function signupUser(username, password, nickname) {
  * Logs in an existing user using Firebase Auth
  */
 export async function loginUser(username, password) {
-  const email = `${username.toLowerCase()}@craps.local`;
+  console.log('leaderboard: loginUser called', username);
+  const lowerUsername = username.toLowerCase();
+  const email = `${lowerUsername}@craps.local`;
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
+    console.log('leaderboard: auth login successful', user.uid);
 
     // Fetch stats from Firestore
-    const userDoc = await getDoc(doc(db, USERS_COLLECTION, username));
+    console.log('leaderboard: fetching firestore doc', lowerUsername);
+    const userDoc = await getDoc(doc(db, USERS_COLLECTION, lowerUsername));
     if (userDoc.exists()) {
+      console.log('leaderboard: firestore doc found');
       return { ...userDoc.data(), uid: user.uid };
     } else {
+      console.log('leaderboard: firestore doc NOT found, using fallback');
       // Fallback if doc doesn't exist yet
       return { username, nickname: user.displayName || username, balance: 300, uid: user.uid };
     }
   } catch (error) {
-    console.error("Login error:", error);
+    console.error("leaderboard: login error:", error);
     throw error;
   }
 }
@@ -93,15 +102,16 @@ export function subscribeToAuth(callback) {
   return onAuthStateChanged(auth, async (user) => {
     if (user) {
       // User is signed in, fetch their Firestore data
-      // Note: We use the email prefix as username for now to match current logic
-      const username = user.email.split('@')[0];
-      const userDoc = await getDoc(doc(db, USERS_COLLECTION, username));
+      const lowerUsername = user.email.split('@')[0];
+      console.log('leaderboard: auth state change - logged in', lowerUsername);
+      const userDoc = await getDoc(doc(db, USERS_COLLECTION, lowerUsername));
       if (userDoc.exists()) {
         callback({ ...userDoc.data(), uid: user.uid });
       } else {
-        callback({ username, nickname: user.displayName || username, balance: 300, uid: user.uid });
+        callback({ username: lowerUsername, nickname: user.displayName || lowerUsername, balance: 300, uid: user.uid });
       }
     } else {
+      console.log('leaderboard: auth state change - logged out');
       callback(null);
     }
   });
@@ -155,7 +165,8 @@ export function subscribeToLeaderboard(callback) {
 export async function updateGlobalUser(userStats) {
   if (!userStats || userStats.username === 'Guest') return;
 
-  const userRef = doc(db, USERS_COLLECTION, userStats.username);
+  const lowerUsername = userStats.username.toLowerCase();
+  const userRef = doc(db, USERS_COLLECTION, lowerUsername);
   
   const sanitizedUser = {
     username: userStats.username,
@@ -189,8 +200,9 @@ export async function syncAllLocalUsers(localUsers) {
     if (u.username === 'Guest') continue;
 
     try {
+      const lowerUsername = u.username.toLowerCase();
       // 1. Check if Firestore doc exists
-      const userRef = doc(db, USERS_COLLECTION, u.username);
+      const userRef = doc(db, USERS_COLLECTION, lowerUsername);
       const userDoc = await getDoc(userRef);
 
       if (!userDoc.exists()) {
@@ -198,7 +210,7 @@ export async function syncAllLocalUsers(localUsers) {
         // 2. Create Auth account if password exists (dummy email)
         if (u.password) {
           try {
-            const email = `${u.username.toLowerCase()}@craps.local`;
+            const email = `${lowerUsername}@craps.local`;
             await createUserWithEmailAndPassword(auth, email, u.password);
             await updateProfile(auth.currentUser, { displayName: u.nickname || u.username });
             console.log(`Auth account created for ${u.username}`);

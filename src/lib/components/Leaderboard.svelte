@@ -69,7 +69,8 @@
             <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest">Player</th>
             <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Balance</th>
             <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Highest</th>
-            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Largest Win</th>
+            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Win</th>
+            <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Loss</th>
             <th class="px-6 py-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Resets</th>
           </tr>
         </thead>
@@ -134,6 +135,12 @@
                 <div class="flex items-center justify-end gap-1 font-black text-yellow-400 tabular-nums">
                   <TrendingUp size={14} />
                   {(user.largestWin || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </div>
+              </td>
+              <td class="px-6 py-4 text-right">
+                <div class="flex items-center justify-end gap-1 font-black text-red-400 tabular-nums">
+                  <TrendingDown size={14} />
+                  {(user.largestLoss || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </div>
               </td>
               <td class="px-6 py-4 text-right">
